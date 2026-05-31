@@ -1,1 +1,4 @@
 RPi.GPIO>=0.7.1
+numpy
+opencv-python-headless        # no local GUI needed; frames are streamed over HTTP
+# picamera2 is provided by Raspberry Pi OS: sudo apt install python3-picamera2
