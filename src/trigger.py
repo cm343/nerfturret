@@ -25,7 +25,7 @@ except ImportError:  # allows running directly from within src/
 
 # ── Configuration ────────────────────────────────────────────────────────────
 TRIGGER_PIN      = 22       # BCM GPIO pin for the dedicated trigger servo
-DEG_PER_SEC      = 300.0    # full-speed rate: 60° in 0.2 s
+DEG_PER_SEC      = 150   # full-speed rate: 60° in 0.2 s
 PWM_FREQUENCY    = 50       # Hz
 
 DUTY_STOP        = 7.1      # % — trimmed neutral (no drift)
