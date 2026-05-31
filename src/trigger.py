@@ -34,6 +34,9 @@ DUTY_FULL_CCW    = 2.5      # % — full counter-clockwise speed
 
 SWEEP_DEGREES    = 30.0     # rotate this far one way, then back
 SWEEP_SPEED      = 1.0      # speed fraction for the sweep (full speed)
+SWEEP_PAUSE_S    = 0.3      # dwell at neutral between out/back so the servo
+                            # registers the direction reversal (else it may not
+                            # move back when the two moves run back-to-back)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -49,9 +52,11 @@ class Trigger:
         deg_per_sec: float = DEG_PER_SEC,
         sweep_degrees: float = SWEEP_DEGREES,
         sweep_speed: float = SWEEP_SPEED,
+        sweep_pause: float = SWEEP_PAUSE_S,
     ) -> None:
         self.sweep_degrees = sweep_degrees
         self.sweep_speed = sweep_speed
+        self.sweep_pause = sweep_pause
 
         self.servo = Servo(
             pin,
@@ -103,8 +108,9 @@ class Trigger:
                 self._queue.task_done()
 
     def _sweep(self) -> None:
-        """Rotate out by sweep_degrees, then back to start."""
+        """Rotate out by sweep_degrees, pause at neutral, then back to start."""
         self.servo.move_by(-self.sweep_degrees, self.sweep_speed)
+        time.sleep(self.sweep_pause)  # let the servo settle before reversing
         self.servo.move_by(self.sweep_degrees, self.sweep_speed)
 
     # ── context manager ────────────────────────────────────────────────────────
