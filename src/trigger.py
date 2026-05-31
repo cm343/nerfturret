@@ -32,7 +32,7 @@ DUTY_STOP        = 7.1      # % — trimmed neutral (no drift)
 DUTY_FULL_CW     = 12.5     # % — full clockwise speed
 DUTY_FULL_CCW    = 2.5      # % — full counter-clockwise speed
 
-SWEEP_DEGREES    = 30.0     # rotate this far one way, then back
+SWEEP_DEGREES    = 45.0     # rotate this far one way, then back
 SWEEP_SPEED      = 1.0      # speed fraction for the sweep (full speed)
 SWEEP_PAUSE_S    = 0.3      # dwell at neutral between out/back so the servo
                             # registers the direction reversal (else it may not
