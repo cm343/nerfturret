@@ -66,6 +66,8 @@ class PiCameraSource(FrameSource):
         from picamera2 import Picamera2  # lazy: only needed on the Pi
 
         self._picam = Picamera2()
+        # picamera2's "RGB888" actually delivers a numpy array in BGR channel
+        # order — exactly what OpenCV expects — so no colour conversion is needed.
         config = self._picam.create_video_configuration(
             main={"size": tuple(resolution), "format": "RGB888"}
         )
@@ -73,9 +75,8 @@ class PiCameraSource(FrameSource):
         self._picam.start()
 
     def read(self) -> "np.ndarray | None":
-        rgb = self._picam.capture_array()
-        # picamera2 gives RGB; OpenCV works in BGR
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        # Already BGR for OpenCV (see note in __init__); return as-is.
+        return self._picam.capture_array()
 
     def close(self) -> None:
         self._picam.stop()

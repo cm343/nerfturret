@@ -1,0 +1,7 @@
+# Dev/test dependencies — installed into .venv on a non-Pi dev machine.
+# RPi.GPIO and picamera2 are intentionally omitted: they are Pi-only, and the
+# tested modules (streaming.py, vision.py) do not import them, so the suite runs
+# off-Pi against a synthetic frame source.
+numpy
+opencv-python-headless
+pytest
