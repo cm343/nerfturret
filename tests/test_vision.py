@@ -126,3 +126,66 @@ def test_create_frame_source_explicit_device_uses_opencv(monkeypatch):
     result = vision.create_frame_source(3)
     assert result == "opencv-source"
     assert captured["device"] == 3
+
+
+# ── detector integration ─────────────────────────────────────────────────────
+def test_select_target_empty_means_not_found():
+    from vision import ComputerVision
+
+    st = ComputerVision._select_target([], (48, 64, 3))
+    assert st.found is False
+    assert (st.x, st.y) == (0.0, 0.0)
+    assert st.timestamp > 0
+
+
+def test_select_target_picks_highest_conf_and_normalizes():
+    from detection import Detection
+    from vision import ComputerVision
+
+    # Centered low-conf box vs. bottom-right high-conf box in a 64x48 frame.
+    centered = Detection(cls_id=0, label="a", conf=0.4, bbox=(28, 20, 36, 28))
+    corner = Detection(cls_id=1, label="b", conf=0.9, bbox=(56, 40, 64, 48))
+    st = ComputerVision._select_target([centered, corner], (48, 64, 3))
+
+    assert st.found is True
+    # corner center is (60, 44): right of and below center -> positive x and y.
+    assert st.x == pytest.approx((60 - 32) / 32)
+    assert st.y == pytest.approx((44 - 24) / 24)
+
+
+def test_annotate_draws_boxes_in_addition_to_crosshair():
+    from detection import Detection
+    from vision import ComputerVision
+
+    blank = np.zeros((48, 64, 3), dtype=np.uint8)
+    crosshair_only = ComputerVision._stage_annotate(blank)
+    with_box = ComputerVision._stage_annotate(
+        blank, [Detection(cls_id=0, label="x", conf=0.9, bbox=(5, 5, 40, 30))]
+    )
+    assert with_box.sum() > crosshair_only.sum()  # box + label added pixels
+
+
+def test_pipeline_uses_injected_detector(free_port):
+    from detection import Detection, Detector
+    from streaming import StreamManager
+    from vision import ComputerVision
+
+    class OneTargetDetector(Detector):
+        def detect(self, frame):
+            h, w = frame.shape[:2]
+            return [Detection(cls_id=0, label="drone", conf=0.9,
+                              bbox=(w - 8, h - 6, w, h))]  # bottom-right corner
+
+    source = _fake_source_cls()()
+    mgr = StreamManager(host="127.0.0.1", base_port=free_port())
+    cv = ComputerVision(source=source, detector=OneTargetDetector(),
+                        stream_manager=mgr, target_fps=120)
+    try:
+        cv.start()
+        time.sleep(0.2)
+        st = cv.get_state()
+        assert st.found is True
+        assert st.x > 0 and st.y > 0  # target down-and-right of center
+    finally:
+        cv.stop()
+        mgr.close_all()

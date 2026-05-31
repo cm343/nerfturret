@@ -36,3 +36,7 @@ Thumbs.db
 
 # Raspberry Pi / hardware logs
 *.log
+
+# Cloned upstream model repo (weights ~200MB, has its own .git) — not vendored.
+# See src/detection.py for the expected weights path.
+Real-Time-Flying-Object-Detection_with_YOLOv8/

@@ -2,3 +2,12 @@ RPi.GPIO>=0.7.1
 numpy
 opencv-python-headless        # no local GUI needed; frames are streamed over HTTP
 # picamera2 is provided by Raspberry Pi OS: sudo apt install python3-picamera2
+#
+# Detection backends (detection.py):
+#   "null"   — default; no extra deps.
+#   "remote" — offload to a desktop running inference_server.py; needs nothing
+#              beyond opencv above (uses stdlib HTTP). Recommended on the Pi.
+#   "local"  — run YOLOv8 on the Pi itself. Only then install ultralytics (it
+#              pulls in torch, which is heavy on the Pi); export to NCNN first
+#              with scripts/export_ncnn.py for usable speed.
+# ultralytics                  # uncomment only for on-Pi "local" detection

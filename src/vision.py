@@ -3,14 +3,15 @@
 ComputerVision — capture frames, run an OpenCV pipeline, stream the stages.
 
 The module pulls frames from a pluggable source (Picamera2 on a Raspberry Pi,
-or any cv2.VideoCapture device/file off-Pi), runs them through a small pipeline,
-and publishes each stage's image to its own MJPEG stream (one port per stage,
-managed by StreamManager). Information extracted from the frames is kept in
-module state (a TargetState) and retrievable via get_state().
+or any cv2.VideoCapture device/file off-Pi), runs each through a pluggable
+Detector (see detection.py), and publishes the raw frame and an annotated frame
+(boxes drawn) to their own MJPEG streams (one port per stage, managed by
+StreamManager). The chosen target is kept in module state (a TargetState) as a
+normalized offset from frame center, retrievable via get_state().
 
-The pipeline stages and the detection step are deliberate stubs for now: stages
-just forward/lightly annotate the image, and detection returns a placeholder.
-Replace _build_pipeline() and _detect() with real processing later.
+The detector backend is selected by detection.DETECTOR_BACKEND: "null" (default,
+finds nothing — keeps this importable with no torch), "local" (Ultralytics on
+this machine), or "remote" (offload to a desktop running inference_server.py).
 
     cv = ComputerVision()
     cv.start()
@@ -28,8 +29,10 @@ import numpy as np
 
 try:
     from .streaming import StreamManager
+    from .detection import Detector, create_detector
 except ImportError:  # allows running directly from within src/
     from streaming import StreamManager
+    from detection import Detector, create_detector
 
 # ── Configuration ────────────────────────────────────────────────────────────
 CAPTURE_RESOLUTION = (640, 480)   # (width, height)
@@ -123,6 +126,7 @@ class ComputerVision:
         self,
         *,
         source: FrameSource | None = None,
+        detector: Detector | None = None,
         stream_manager: StreamManager | None = None,
         resolution=CAPTURE_RESOLUTION,
         target_fps: int = TARGET_FPS,
@@ -131,44 +135,54 @@ class ComputerVision:
         self.target_fps = target_fps
 
         self._source = source if source is not None else create_frame_source(resolution=resolution)
+        self._detector = detector if detector is not None else create_detector()
         self._owns_manager = stream_manager is None
         self.streams = stream_manager if stream_manager is not None else StreamManager()
 
         # One stream (its own port) per pipeline stage.
         self._stage_streams = {name: self.streams.create_stream(name) for name in STAGE_NAMES}
-        self._pipeline = self._build_pipeline()
 
         self._state = TargetState()
         self._state_lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="vision", daemon=True)
         self._running = threading.Event()
 
-    # ── stubs to replace with real processing ─────────────────────────────────
-    def _build_pipeline(self):
-        """Return an ordered list of (stage_name, stage_fn).
-
-        Each stage_fn takes a BGR frame and returns a BGR frame to publish.
-        Stubs for now: 'input' forwards the raw frame; 'annotated' draws a center
-        crosshair to demonstrate modifying the image.
-        """
-        return [
-            ("input", lambda frame: frame),
-            ("annotated", self._stage_annotate),
-        ]
-
+    # ── detection → state / annotation ─────────────────────────────────────────
     @staticmethod
-    def _stage_annotate(frame: "np.ndarray") -> "np.ndarray":
+    def _stage_annotate(frame: "np.ndarray", detections=()) -> "np.ndarray":
+        """Draw detection boxes + labels and a center crosshair on a copy."""
         out = frame.copy()
         h, w = out.shape[:2]
+
+        for det in detections:
+            x1, y1, x2, y2 = (int(v) for v in det.bbox)
+            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                out, f"{det.label} {det.conf * 100:.0f}%", (x1, max(y1 - 6, 10)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA,
+            )
+
         cx, cy = w // 2, h // 2
         color = (0, 255, 0)
         cv2.line(out, (cx - 15, cy), (cx + 15, cy), color, 1)
         cv2.line(out, (cx, cy - 15), (cx, cy + 15), color, 1)
         return out
 
-    def _detect(self, frame: "np.ndarray") -> TargetState:
-        """Stub detector — returns a placeholder TargetState (no target found)."""
-        return TargetState(found=False, x=0.0, y=0.0, timestamp=time.time())
+    @staticmethod
+    def _select_target(detections, shape) -> TargetState:
+        """Pick the highest-confidence detection and express it as a TargetState.
+
+        The offset is normalized to [-1, 1] relative to the frame center: x is
+        positive to the right, y positive downward.
+        """
+        if not detections:
+            return TargetState(found=False, x=0.0, y=0.0, timestamp=time.time())
+
+        target = max(detections, key=lambda d: d.conf)
+        h, w = shape[:2]
+        x = (target.cx - w / 2.0) / (w / 2.0)
+        y = (target.cy - h / 2.0) / (h / 2.0)
+        return TargetState(found=True, x=x, y=y, timestamp=time.time())
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -182,6 +196,7 @@ class ComputerVision:
         if self._thread.is_alive():
             self._thread.join(timeout=2.0)
         self._source.close()
+        self._detector.close()
         if self._owns_manager:
             self.streams.close_all()
 
@@ -201,11 +216,14 @@ class ComputerVision:
                 time.sleep(0.01)
                 continue
 
-            for name, stage_fn in self._pipeline:
-                out = stage_fn(frame)
-                self._stage_streams[name].publish(out)
+            # Detect once per frame; feed both the annotated stream and the state.
+            detections = self._detector.detect(frame)
+            self._stage_streams["input"].publish(frame)
+            self._stage_streams["annotated"].publish(
+                self._stage_annotate(frame, detections)
+            )
 
-            state = self._detect(frame)
+            state = self._select_target(detections, frame.shape)
             with self._state_lock:
                 self._state = state
 

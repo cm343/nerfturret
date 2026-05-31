@@ -1,0 +1,5 @@
+# Desktop/laptop dependencies for running src/inference_server.py (the GPU-side
+# YOLOv8 server the Pi's "remote" detector talks to). NOT needed on the Pi for
+# the "remote" backend. ultralytics pulls in torch/torchvision.
+ultralytics
+opencv-python
