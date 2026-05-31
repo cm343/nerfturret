@@ -7,12 +7,13 @@ then stops.
 Controls:
   Left / Right  →  horizontal servo  (CCW / CW)
   Up   / Down   →  vertical servo    (CW  / CCW)
-  T             →  trigger sweep: horizontal TRIGGER_DEGREES left then back right
+  T             →  fire the trigger servo (Trigger module, dedicated pin)
   + / -         →  trim DUTY_STOP up / down by TRIM_STEP (both servos)
   P             →  print current DUTY_STOP so you can copy it into config
   Esc / Q       →  quit
 """
 
+import os
 import sys
 import tty
 import termios
@@ -20,6 +21,10 @@ import signal
 import time
 
 import RPi.GPIO as GPIO
+
+# Make the src/ package importable when this script is run directly from helper/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from trigger import Trigger  # noqa: E402
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SERVO_HORIZONTAL_PIN  = 17      # BCM GPIO pin for horizontal servo
@@ -37,17 +42,14 @@ FULL_SPEED_TIME_S     = 0.2     # … this many seconds
 
 STEP_DEGREES          = 10.0    # degrees to rotate per key press
 
-TRIGGER_DEGREES       = 30.0    # 't' sweep: rotate this far left then back right
-TRIGGER_SPEED         = 1.0     # full speed (kept for parity; pulses run full speed)
-
 TRIM_STEP             = 0.05    # % duty-cycle change per +/- trim key press
 TRIM_MIN              = 5.0     # % — lower bound for DUTY_STOP trim
 TRIM_MAX              = 10.0    # % — upper bound for DUTY_STOP trim
 # ─────────────────────────────────────────────────────────────────────────────
+# The trigger servo is handled by the Trigger module (its own pin & constants).
 
-# Derived — how long to run at full speed to cover a given angle
-STEP_DURATION_S: float    = STEP_DEGREES    * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
-TRIGGER_DURATION_S: float = TRIGGER_DEGREES * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
+# Derived — how long to run at full speed to cover STEP_DEGREES
+STEP_DURATION_S: float = STEP_DEGREES * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
 
 KEY_UP         = '\x1b[A'
 KEY_DOWN       = '\x1b[B'
@@ -80,10 +82,10 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def pulse(pwm, duty: float, stop: float, duration: float = STEP_DURATION_S) -> None:
-    """Run servo at duty for `duration` seconds, then return to the stop duty."""
+def pulse(pwm, duty: float, stop: float) -> None:
+    """Run servo at duty for exactly STEP_DURATION_S, then return to stop duty."""
     pwm.ChangeDutyCycle(duty)
-    time.sleep(duration)
+    time.sleep(STEP_DURATION_S)
     pwm.ChangeDutyCycle(stop)
 
 
@@ -100,8 +102,13 @@ def main() -> None:
     pwm_h.start(duty_stop)
     pwm_v.start(duty_stop)
 
+    # Dedicated trigger servo, driven by the Trigger module on its own pin.
+    trigger = Trigger()
+    trigger.start()
+
     def shutdown(sig=None, frame=None) -> None:
         print('\nShutting down…')
+        trigger.stop()
         pwm_h.ChangeDutyCycle(duty_stop)
         pwm_v.ChangeDutyCycle(duty_stop)
         time.sleep(0.1)
@@ -117,7 +124,7 @@ def main() -> None:
     print(f'  Step: {STEP_DEGREES}°  →  {STEP_DURATION_S * 1000:.1f} ms pulse at full speed')
     print(f'  Horizontal  GPIO {SERVO_HORIZONTAL_PIN}  ←/→')
     print(f'  Vertical    GPIO {SERVO_VERTICAL_PIN}    ↑/↓')
-    print(f'  T = trigger sweep ({TRIGGER_DEGREES}° left then back)')
+    print('  T = fire trigger servo (Trigger module)')
     print('  +/- = trim stop point   P = print trim   Esc/Q = quit\n')
 
     def status() -> None:
@@ -137,9 +144,7 @@ def main() -> None:
         elif key == KEY_DOWN:
             pulse(pwm_v, DUTY_FULL_CCW, duty_stop)
         elif key.lower() == KEY_TRIGGER:
-            # Sweep horizontal servo TRIGGER_DEGREES left (CCW) then back right (CW)
-            pulse(pwm_h, DUTY_FULL_CCW, duty_stop, TRIGGER_DURATION_S)
-            pulse(pwm_h, DUTY_FULL_CW,  duty_stop, TRIGGER_DURATION_S)
+            trigger.fire()  # non-blocking; the Trigger worker thread sweeps
         elif key == KEY_TRIM_UP:
             duty_stop = min(TRIM_MAX, round(duty_stop + TRIM_STEP, 4))
             pwm_h.ChangeDutyCycle(duty_stop)

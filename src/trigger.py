@@ -24,7 +24,7 @@ except ImportError:  # allows running directly from within src/
     from servo import Servo
 
 # ── Configuration ────────────────────────────────────────────────────────────
-SERVO_PIN        = 17       # BCM GPIO pin for the trigger servo
+TRIGGER_PIN      = 22       # BCM GPIO pin for the dedicated trigger servo
 DEG_PER_SEC      = 300.0    # full-speed rate: 60° in 0.2 s
 PWM_FREQUENCY    = 50       # Hz
 
@@ -45,7 +45,7 @@ class Trigger:
     def __init__(
         self,
         *,
-        pin: int = SERVO_PIN,
+        pin: int = TRIGGER_PIN,
         deg_per_sec: float = DEG_PER_SEC,
         sweep_degrees: float = SWEEP_DEGREES,
         sweep_speed: float = SWEEP_SPEED,
@@ -75,13 +75,15 @@ class Trigger:
         self._started = True
 
     def stop(self) -> None:
-        """Signal the worker to exit, wait for it, and release GPIO."""
+        """Signal the worker to exit, join it, and stop this servo's PWM.
+
+        Does NOT call the global GPIO.cleanup() — leave that to the owner so a
+        Trigger can be embedded in a script that drives other servos."""
         if not self._started:
             return
         self._queue.put(self._STOP)
         self._thread.join()
         self.servo.cleanup()
-        GPIO.cleanup()
         self._started = False
 
     # ── signalling ──────────────────────────────────────────────────────────
@@ -123,6 +125,7 @@ def main() -> None:
         # joins the thread. Two moves at full speed ~ 2 * 30/300 s = 0.2 s.
         time.sleep(1.0)
         print("Done.")
+    GPIO.cleanup()  # the standalone script owns the GPIO subsystem
 
 
 if __name__ == "__main__":
