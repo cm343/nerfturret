@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Servo test script for Raspberry Pi.
-Control two servos with arrow keys:
-  Left / Right  →  horizontal servo
-  Up   / Down   →  vertical servo
+Servo test script for Raspberry Pi — 360° continuous rotation servos.
+PWM duty cycle controls speed and direction (not angle).
+
+Controls:
+  Left / Right  →  horizontal servo  (CCW / CW)
+  Up   / Down   →  vertical servo    (CW  / CCW)
+  Space         →  stop both servos
   Q             →  quit
 """
 
@@ -16,21 +19,22 @@ import time
 import RPi.GPIO as GPIO
 
 # ── Configuration ────────────────────────────────────────────────────────────
-SERVO_HORIZONTAL_PIN = 17       # BCM GPIO pin for left/right servo
-SERVO_VERTICAL_PIN   = 27       # BCM GPIO pin for up/down servo
+SERVO_HORIZONTAL_PIN = 17       # BCM GPIO pin for horizontal servo
+SERVO_VERTICAL_PIN   = 27       # BCM GPIO pin for vertical servo
 
 PWM_FREQUENCY        = 50       # Hz — standard servo frequency
 
-ANGLE_MIN            = 0        # degrees — hard lower limit
-ANGLE_MAX            = 180      # degrees — hard upper limit
-ANGLE_START          = 90       # degrees — starting position for both servos
-ANGLE_STEP           = 5        # degrees moved per key press
+# Duty-cycle calibration.  At DUTY_STOP the servo should be stationary.
+# Adjust DUTY_STOP first (trim), then the CW/CCW limits if needed.
+DUTY_STOP            = 7.5     # % — neutral / stopped  (~1.5 ms pulse)
+DUTY_FULL_CW         = 12.5    # % — maximum clockwise speed  (~2 ms pulse)
+DUTY_FULL_CCW        = 2.5     # % — maximum counter-clockwise speed  (~1 ms pulse)
 
-# Pulse-width mapping.  Adjust if your servo doesn't reach its physical limits.
-DUTY_MIN             = 2.5      # % duty cycle at ANGLE_MIN (typically 1 ms pulse)
-DUTY_MAX             = 12.5     # % duty cycle at ANGLE_MAX (typically 2 ms pulse)
+# Number of discrete speed steps between stopped and full speed.
+SPEED_STEPS          = 10
 
-UPDATE_DELAY         = 0.02     # seconds to hold the PWM signal after each move
+# Seconds between reading the next key (keep short so the servo reacts quickly).
+UPDATE_DELAY         = 0.05
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ANSI escape sequences produced by arrow keys in a standard terminal
@@ -38,16 +42,23 @@ KEY_UP    = '\x1b[A'
 KEY_DOWN  = '\x1b[B'
 KEY_RIGHT = '\x1b[C'
 KEY_LEFT  = '\x1b[D'
+KEY_STOP  = ' '
 KEY_QUIT  = 'q'
 
 
-def angle_to_duty(angle: float) -> float:
-    """Map an angle in [ANGLE_MIN, ANGLE_MAX] to a PWM duty-cycle percentage."""
-    ratio = (angle - ANGLE_MIN) / (ANGLE_MAX - ANGLE_MIN)
-    return DUTY_MIN + ratio * (DUTY_MAX - DUTY_MIN)
+def speed_to_duty(speed: int) -> float:
+    """
+    Convert a speed value in [-SPEED_STEPS, +SPEED_STEPS] to a duty cycle.
+    0 → DUTY_STOP, positive → CW, negative → CCW.
+    """
+    if speed == 0:
+        return DUTY_STOP
+    if speed > 0:
+        return DUTY_STOP + speed * (DUTY_FULL_CW  - DUTY_STOP) / SPEED_STEPS
+    return     DUTY_STOP + speed * (DUTY_STOP - DUTY_FULL_CCW) / SPEED_STEPS
 
 
-def clamp(value: float, lo: float, hi: float) -> float:
+def clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, value))
 
 
@@ -58,11 +69,24 @@ def read_key() -> str:
     try:
         tty.setraw(fd)
         ch = sys.stdin.read(1)
-        if ch == '\x1b':              # start of escape sequence
-            ch += sys.stdin.read(2)   # consume '[' + letter
+        if ch == '\x1b':
+            ch += sys.stdin.read(2)
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def speed_bar(speed: int, width: int = SPEED_STEPS) -> str:
+    """Simple ASCII bar: negative fills left of center, positive fills right."""
+    bar = ['-'] * (2 * width + 1)
+    bar[width] = '|'
+    if speed > 0:
+        for i in range(1, speed + 1):
+            bar[width + i] = '>'
+    elif speed < 0:
+        for i in range(1, -speed + 1):
+            bar[width - i] = '<'
+    return ''.join(bar)
 
 
 def main() -> None:
@@ -73,14 +97,17 @@ def main() -> None:
     pwm_h = GPIO.PWM(SERVO_HORIZONTAL_PIN, PWM_FREQUENCY)
     pwm_v = GPIO.PWM(SERVO_VERTICAL_PIN,   PWM_FREQUENCY)
 
-    angle_h = float(ANGLE_START)
-    angle_v = float(ANGLE_START)
+    speed_h = 0
+    speed_v = 0
 
-    pwm_h.start(angle_to_duty(angle_h))
-    pwm_v.start(angle_to_duty(angle_v))
+    pwm_h.start(DUTY_STOP)
+    pwm_v.start(DUTY_STOP)
 
     def shutdown(sig=None, frame=None) -> None:
         print('\nShutting down…')
+        pwm_h.ChangeDutyCycle(DUTY_STOP)
+        pwm_v.ChangeDutyCycle(DUTY_STOP)
+        time.sleep(0.1)
         pwm_h.stop()
         pwm_v.stop()
         GPIO.cleanup()
@@ -89,14 +116,18 @@ def main() -> None:
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    print('Servo test running.')
-    print(f'  Horizontal servo  GPIO {SERVO_HORIZONTAL_PIN}  ←/→ arrow keys')
-    print(f'  Vertical servo    GPIO {SERVO_VERTICAL_PIN}    ↑/↓ arrow keys')
-    print(f'  Range {ANGLE_MIN}°–{ANGLE_MAX}°  •  step {ANGLE_STEP}°  •  start {ANGLE_START}°')
-    print('Press Q to quit.\n')
+    print('360° Servo test running.')
+    print(f'  Horizontal  GPIO {SERVO_HORIZONTAL_PIN}  ←/→  (CCW / CW)')
+    print(f'  Vertical    GPIO {SERVO_VERTICAL_PIN}    ↑/↓  (CW  / CCW)')
+    print(f'  Speed steps: {SPEED_STEPS}   Stop duty: {DUTY_STOP}%')
+    print('  Space = stop both   Q = quit\n')
 
     def status() -> None:
-        print(f'  Horizontal: {angle_h:>6.1f}°   Vertical: {angle_v:>6.1f}°', end='\r')
+        print(
+            f'  H {speed_bar(speed_h)}  {speed_h:+d}   '
+            f'V {speed_bar(speed_v)}  {speed_v:+d}   ',
+            end='\r',
+        )
 
     status()
 
@@ -104,17 +135,22 @@ def main() -> None:
         key = read_key()
 
         if key == KEY_LEFT:
-            angle_h = clamp(angle_h - ANGLE_STEP, ANGLE_MIN, ANGLE_MAX)
-            pwm_h.ChangeDutyCycle(angle_to_duty(angle_h))
+            speed_h = clamp(speed_h - 1, -SPEED_STEPS, SPEED_STEPS)
+            pwm_h.ChangeDutyCycle(speed_to_duty(speed_h))
         elif key == KEY_RIGHT:
-            angle_h = clamp(angle_h + ANGLE_STEP, ANGLE_MIN, ANGLE_MAX)
-            pwm_h.ChangeDutyCycle(angle_to_duty(angle_h))
+            speed_h = clamp(speed_h + 1, -SPEED_STEPS, SPEED_STEPS)
+            pwm_h.ChangeDutyCycle(speed_to_duty(speed_h))
         elif key == KEY_UP:
-            angle_v = clamp(angle_v + ANGLE_STEP, ANGLE_MIN, ANGLE_MAX)
-            pwm_v.ChangeDutyCycle(angle_to_duty(angle_v))
+            speed_v = clamp(speed_v + 1, -SPEED_STEPS, SPEED_STEPS)
+            pwm_v.ChangeDutyCycle(speed_to_duty(speed_v))
         elif key == KEY_DOWN:
-            angle_v = clamp(angle_v - ANGLE_STEP, ANGLE_MIN, ANGLE_MAX)
-            pwm_v.ChangeDutyCycle(angle_to_duty(angle_v))
+            speed_v = clamp(speed_v - 1, -SPEED_STEPS, SPEED_STEPS)
+            pwm_v.ChangeDutyCycle(speed_to_duty(speed_v))
+        elif key == KEY_STOP:
+            speed_h = 0
+            speed_v = 0
+            pwm_h.ChangeDutyCycle(DUTY_STOP)
+            pwm_v.ChangeDutyCycle(DUTY_STOP)
         elif key.lower() == KEY_QUIT:
             shutdown()
 
