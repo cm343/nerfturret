@@ -2,7 +2,8 @@
 """
 Servo step script for Raspberry Pi — 360° continuous rotation servos.
 Each arrow key press rotates the servo by exactly STEP_DEGREES at full speed,
-then stops.
+then stops. Pan/tilt are driven through the shared Servo class (src/servo.py);
+the trigger is driven through the Trigger module (src/trigger.py).
 
 Controls:
   Left / Right  →  horizontal servo  (CCW / CW)
@@ -18,12 +19,12 @@ import sys
 import tty
 import termios
 import signal
-import time
 
 import RPi.GPIO as GPIO
 
 # Make the src/ package importable when this script is run directly from helper/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from servo import Servo      # noqa: E402
 from trigger import Trigger  # noqa: E402
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -48,8 +49,8 @@ TRIM_MAX              = 10.0    # % — upper bound for DUTY_STOP trim
 # ─────────────────────────────────────────────────────────────────────────────
 # The trigger servo is handled by the Trigger module (its own pin & constants).
 
-# Derived — how long to run at full speed to cover STEP_DEGREES
-STEP_DURATION_S: float = STEP_DEGREES * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
+# Derived — full-speed rate the Servo class needs to time its move_by() rotations
+DEG_PER_SEC = FULL_SPEED_DEGREES / FULL_SPEED_TIME_S
 
 KEY_UP         = '\x1b[A'
 KEY_DOWN       = '\x1b[B'
@@ -61,6 +62,18 @@ KEY_TRIM_UP    = '+'
 KEY_TRIM_DOWN  = '-'
 KEY_PRINT_TRIM = 'p'
 KEY_QUIT       = 'q'
+
+
+def make_servo(pin: int) -> Servo:
+    """Build a Servo on `pin` using this script's calibration constants."""
+    return Servo(
+        pin,
+        DEG_PER_SEC,
+        pwm_frequency=PWM_FREQUENCY,
+        duty_stop=DUTY_STOP,
+        duty_full_cw=DUTY_FULL_CW,
+        duty_full_ccw=DUTY_FULL_CCW,
+    )
 
 
 def read_key() -> str:
@@ -82,25 +95,15 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def pulse(pwm, duty: float, stop: float) -> None:
-    """Run servo at duty for exactly STEP_DURATION_S, then return to stop duty."""
-    pwm.ChangeDutyCycle(duty)
-    time.sleep(STEP_DURATION_S)
-    pwm.ChangeDutyCycle(stop)
-
-
 def main() -> None:
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(SERVO_HORIZONTAL_PIN, GPIO.OUT)
-    GPIO.setup(SERVO_VERTICAL_PIN,   GPIO.OUT)
 
-    pwm_h = GPIO.PWM(SERVO_HORIZONTAL_PIN, PWM_FREQUENCY)
-    pwm_v = GPIO.PWM(SERVO_VERTICAL_PIN,   PWM_FREQUENCY)
+    servo_h = make_servo(SERVO_HORIZONTAL_PIN)
+    servo_v = make_servo(SERVO_VERTICAL_PIN)
+    servo_h.start()
+    servo_v.start()
 
-    duty_stop = DUTY_STOP  # live-trimmed value
-
-    pwm_h.start(duty_stop)
-    pwm_v.start(duty_stop)
+    duty_stop = DUTY_STOP  # live-trimmed value, mirrored onto both servos
 
     # Dedicated trigger servo, driven by the Trigger module on its own pin.
     trigger = Trigger()
@@ -109,19 +112,17 @@ def main() -> None:
     def shutdown(sig=None, frame=None) -> None:
         print('\nShutting down…')
         trigger.stop()
-        pwm_h.ChangeDutyCycle(duty_stop)
-        pwm_v.ChangeDutyCycle(duty_stop)
-        time.sleep(0.1)
-        pwm_h.stop()
-        pwm_v.stop()
+        servo_h.cleanup()
+        servo_v.cleanup()
         GPIO.cleanup()
         sys.exit(0)
 
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    step_ms = STEP_DEGREES / DEG_PER_SEC * 1000
     print('Servo step control.')
-    print(f'  Step: {STEP_DEGREES}°  →  {STEP_DURATION_S * 1000:.1f} ms pulse at full speed')
+    print(f'  Step: {STEP_DEGREES}°  →  {step_ms:.1f} ms pulse at full speed')
     print(f'  Horizontal  GPIO {SERVO_HORIZONTAL_PIN}  ←/→')
     print(f'  Vertical    GPIO {SERVO_VERTICAL_PIN}    ↑/↓')
     print('  T = fire trigger servo (Trigger module)')
@@ -130,29 +131,34 @@ def main() -> None:
     def status() -> None:
         print(f'  DUTY_STOP: {duty_stop:.3f}%   ', end='\r')
 
+    def apply_trim(new_stop: float) -> None:
+        """Update the live neutral on both servos and hold there."""
+        servo_h.duty_stop = new_stop
+        servo_v.duty_stop = new_stop
+        servo_h.stop()
+        servo_v.stop()
+
     status()
 
     while True:
         key = read_key()
 
         if key == KEY_LEFT:
-            pulse(pwm_h, DUTY_FULL_CCW, duty_stop)
+            servo_h.move_by(-STEP_DEGREES)   # CCW
         elif key == KEY_RIGHT:
-            pulse(pwm_h, DUTY_FULL_CW, duty_stop)
+            servo_h.move_by(STEP_DEGREES)    # CW
         elif key == KEY_UP:
-            pulse(pwm_v, DUTY_FULL_CW, duty_stop)
+            servo_v.move_by(STEP_DEGREES)    # CW
         elif key == KEY_DOWN:
-            pulse(pwm_v, DUTY_FULL_CCW, duty_stop)
+            servo_v.move_by(-STEP_DEGREES)   # CCW
         elif key.lower() == KEY_TRIGGER:
             trigger.fire()  # non-blocking; the Trigger worker thread sweeps
         elif key == KEY_TRIM_UP:
             duty_stop = min(TRIM_MAX, round(duty_stop + TRIM_STEP, 4))
-            pwm_h.ChangeDutyCycle(duty_stop)
-            pwm_v.ChangeDutyCycle(duty_stop)
+            apply_trim(duty_stop)
         elif key == KEY_TRIM_DOWN:
             duty_stop = max(TRIM_MIN, round(duty_stop - TRIM_STEP, 4))
-            pwm_h.ChangeDutyCycle(duty_stop)
-            pwm_v.ChangeDutyCycle(duty_stop)
+            apply_trim(duty_stop)
         elif key.lower() == KEY_PRINT_TRIM:
             print(f'\n  >>> DUTY_STOP = {duty_stop:.4f}')
         elif key == KEY_ESC or key.lower() == KEY_QUIT:

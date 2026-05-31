@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Servo test script for Raspberry Pi — 360° continuous rotation servos.
-PWM duty cycle controls speed and direction (not angle).
+PWM duty cycle controls speed and direction (not angle). Each servo is driven
+through the shared Servo class (see src/servo.py).
 
 Controls:
   Left / Right  →  horizontal servo  (CCW / CW)
@@ -10,6 +11,7 @@ Controls:
   Q             →  quit
 """
 
+import os
 import sys
 import tty
 import termios
@@ -17,6 +19,10 @@ import signal
 import time
 
 import RPi.GPIO as GPIO
+
+# Make the src/ package importable when this script is run directly from helper/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from servo import Servo  # noqa: E402
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SERVO_HORIZONTAL_PIN = 17       # BCM GPIO pin for horizontal servo
@@ -29,6 +35,10 @@ PWM_FREQUENCY        = 50       # Hz — standard servo frequency
 DUTY_STOP            = 7.1     # % — neutral / stopped (trimmed, no drift)
 DUTY_FULL_CW         = 12.5    # % — maximum clockwise speed  (~2 ms pulse)
 DUTY_FULL_CCW        = 2.5     # % — maximum counter-clockwise speed  (~1 ms pulse)
+
+# Required by the Servo class; unused here since this script only sets speed
+# (no move_by). Set to the servo's full-speed rate if you do use move_by.
+DEG_PER_SEC          = 300.0   # degrees/second at full speed (60° in 0.2 s)
 
 # Number of discrete speed steps between stopped and full speed.
 SPEED_STEPS          = 10
@@ -46,16 +56,16 @@ KEY_STOP  = ' '
 KEY_QUIT  = 'q'
 
 
-def speed_to_duty(speed: int) -> float:
-    """
-    Convert a speed value in [-SPEED_STEPS, +SPEED_STEPS] to a duty cycle.
-    0 → DUTY_STOP, positive → CW, negative → CCW.
-    """
-    if speed == 0:
-        return DUTY_STOP
-    if speed > 0:
-        return DUTY_STOP + speed * (DUTY_FULL_CW  - DUTY_STOP) / SPEED_STEPS
-    return     DUTY_STOP + speed * (DUTY_STOP - DUTY_FULL_CCW) / SPEED_STEPS
+def make_servo(pin: int) -> Servo:
+    """Build a Servo on `pin` using this script's calibration constants."""
+    return Servo(
+        pin,
+        DEG_PER_SEC,
+        pwm_frequency=PWM_FREQUENCY,
+        duty_stop=DUTY_STOP,
+        duty_full_cw=DUTY_FULL_CW,
+        duty_full_ccw=DUTY_FULL_CCW,
+    )
 
 
 def clamp(value: int, lo: int, hi: int) -> int:
@@ -90,26 +100,19 @@ def speed_bar(speed: int, width: int = SPEED_STEPS) -> str:
 
 
 def main() -> None:
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(SERVO_HORIZONTAL_PIN, GPIO.OUT)
-    GPIO.setup(SERVO_VERTICAL_PIN,   GPIO.OUT)
-
-    pwm_h = GPIO.PWM(SERVO_HORIZONTAL_PIN, PWM_FREQUENCY)
-    pwm_v = GPIO.PWM(SERVO_VERTICAL_PIN,   PWM_FREQUENCY)
+    servo_h = make_servo(SERVO_HORIZONTAL_PIN)
+    servo_v = make_servo(SERVO_VERTICAL_PIN)
 
     speed_h = 0
     speed_v = 0
 
-    pwm_h.start(DUTY_STOP)
-    pwm_v.start(DUTY_STOP)
+    servo_h.start()
+    servo_v.start()
 
     def shutdown(sig=None, frame=None) -> None:
         print('\nShutting down…')
-        pwm_h.ChangeDutyCycle(DUTY_STOP)
-        pwm_v.ChangeDutyCycle(DUTY_STOP)
-        time.sleep(0.1)
-        pwm_h.stop()
-        pwm_v.stop()
+        servo_h.cleanup()
+        servo_v.cleanup()
         GPIO.cleanup()
         sys.exit(0)
 
@@ -136,21 +139,21 @@ def main() -> None:
 
         if key == KEY_LEFT:
             speed_h = clamp(speed_h - 1, -SPEED_STEPS, SPEED_STEPS)
-            pwm_h.ChangeDutyCycle(speed_to_duty(speed_h))
+            servo_h.set_speed(speed_h / SPEED_STEPS)
         elif key == KEY_RIGHT:
             speed_h = clamp(speed_h + 1, -SPEED_STEPS, SPEED_STEPS)
-            pwm_h.ChangeDutyCycle(speed_to_duty(speed_h))
+            servo_h.set_speed(speed_h / SPEED_STEPS)
         elif key == KEY_UP:
             speed_v = clamp(speed_v + 1, -SPEED_STEPS, SPEED_STEPS)
-            pwm_v.ChangeDutyCycle(speed_to_duty(speed_v))
+            servo_v.set_speed(speed_v / SPEED_STEPS)
         elif key == KEY_DOWN:
             speed_v = clamp(speed_v - 1, -SPEED_STEPS, SPEED_STEPS)
-            pwm_v.ChangeDutyCycle(speed_to_duty(speed_v))
+            servo_v.set_speed(speed_v / SPEED_STEPS)
         elif key == KEY_STOP:
             speed_h = 0
             speed_v = 0
-            pwm_h.ChangeDutyCycle(DUTY_STOP)
-            pwm_v.ChangeDutyCycle(DUTY_STOP)
+            servo_h.stop()
+            servo_v.stop()
         elif key.lower() == KEY_QUIT:
             shutdown()
 
