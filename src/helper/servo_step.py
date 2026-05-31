@@ -7,6 +7,7 @@ then stops.
 Controls:
   Left / Right  →  horizontal servo  (CCW / CW)
   Up   / Down   →  vertical servo    (CW  / CCW)
+  T             →  trigger sweep: horizontal TRIGGER_DEGREES left then back right
   + / -         →  trim DUTY_STOP up / down by TRIM_STEP (both servos)
   P             →  print current DUTY_STOP so you can copy it into config
   Esc / Q       →  quit
@@ -26,7 +27,7 @@ SERVO_VERTICAL_PIN    = 27      # BCM GPIO pin for vertical servo
 
 PWM_FREQUENCY         = 50      # Hz — standard servo frequency (20 ms period)
 
-DUTY_STOP             = 7.5     # % — neutral / stopped  (~1.5 ms pulse)
+DUTY_STOP             = 7.1     # % — neutral / stopped (trimmed, no drift)
 DUTY_FULL_CW          = 12.5    # % — full clockwise speed  (~2 ms pulse)
 DUTY_FULL_CCW         = 2.5     # % — full counter-clockwise speed  (~1 ms pulse)
 
@@ -36,19 +37,24 @@ FULL_SPEED_TIME_S     = 0.2     # … this many seconds
 
 STEP_DEGREES          = 10.0    # degrees to rotate per key press
 
+TRIGGER_DEGREES       = 30.0    # 't' sweep: rotate this far left then back right
+TRIGGER_SPEED         = 1.0     # full speed (kept for parity; pulses run full speed)
+
 TRIM_STEP             = 0.05    # % duty-cycle change per +/- trim key press
 TRIM_MIN              = 5.0     # % — lower bound for DUTY_STOP trim
 TRIM_MAX              = 10.0    # % — upper bound for DUTY_STOP trim
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Derived — how long to run at full speed to cover STEP_DEGREES
-STEP_DURATION_S: float = STEP_DEGREES * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
+# Derived — how long to run at full speed to cover a given angle
+STEP_DURATION_S: float    = STEP_DEGREES    * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
+TRIGGER_DURATION_S: float = TRIGGER_DEGREES * FULL_SPEED_TIME_S / FULL_SPEED_DEGREES
 
 KEY_UP         = '\x1b[A'
 KEY_DOWN       = '\x1b[B'
 KEY_RIGHT      = '\x1b[C'
 KEY_LEFT       = '\x1b[D'
 KEY_ESC        = '\x1b'
+KEY_TRIGGER    = 't'
 KEY_TRIM_UP    = '+'
 KEY_TRIM_DOWN  = '-'
 KEY_PRINT_TRIM = 'p'
@@ -74,10 +80,10 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def pulse(pwm, duty: float, stop: float) -> None:
-    """Run servo at duty for exactly STEP_DURATION_S, then stop."""
+def pulse(pwm, duty: float, stop: float, duration: float = STEP_DURATION_S) -> None:
+    """Run servo at duty for `duration` seconds, then return to the stop duty."""
     pwm.ChangeDutyCycle(duty)
-    time.sleep(STEP_DURATION_S)
+    time.sleep(duration)
     pwm.ChangeDutyCycle(stop)
 
 
@@ -111,6 +117,7 @@ def main() -> None:
     print(f'  Step: {STEP_DEGREES}°  →  {STEP_DURATION_S * 1000:.1f} ms pulse at full speed')
     print(f'  Horizontal  GPIO {SERVO_HORIZONTAL_PIN}  ←/→')
     print(f'  Vertical    GPIO {SERVO_VERTICAL_PIN}    ↑/↓')
+    print(f'  T = trigger sweep ({TRIGGER_DEGREES}° left then back)')
     print('  +/- = trim stop point   P = print trim   Esc/Q = quit\n')
 
     def status() -> None:
@@ -129,6 +136,10 @@ def main() -> None:
             pulse(pwm_v, DUTY_FULL_CW, duty_stop)
         elif key == KEY_DOWN:
             pulse(pwm_v, DUTY_FULL_CCW, duty_stop)
+        elif key.lower() == KEY_TRIGGER:
+            # Sweep horizontal servo TRIGGER_DEGREES left (CCW) then back right (CW)
+            pulse(pwm_h, DUTY_FULL_CCW, duty_stop, TRIGGER_DURATION_S)
+            pulse(pwm_h, DUTY_FULL_CW,  duty_stop, TRIGGER_DURATION_S)
         elif key == KEY_TRIM_UP:
             duty_stop = min(TRIM_MAX, round(duty_stop + TRIM_STEP, 4))
             pwm_h.ChangeDutyCycle(duty_stop)

@@ -26,7 +26,7 @@ PWM_FREQUENCY        = 50       # Hz — standard servo frequency
 
 # Duty-cycle calibration.  At DUTY_STOP the servo should be stationary.
 # Adjust DUTY_STOP first (trim), then the CW/CCW limits if needed.
-DUTY_STOP            = 7.5     # % — neutral / stopped  (~1.5 ms pulse)
+DUTY_STOP            = 7.1     # % — neutral / stopped (trimmed, no drift)
 DUTY_FULL_CW         = 12.5    # % — maximum clockwise speed  (~2 ms pulse)
 DUTY_FULL_CCW        = 2.5     # % — maximum counter-clockwise speed  (~1 ms pulse)
 
