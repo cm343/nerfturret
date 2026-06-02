@@ -43,7 +43,7 @@ _WEIGHTS_DIR = os.path.join(
 )
 WEIGHTS_REFINED     = os.path.join(_WEIGHTS_DIR, "refined_3class", "best.pt")
 WEIGHTS_GENERALIZED = os.path.join(_WEIGHTS_DIR, "generalized_40_class", "best.pt")
-DEFAULT_WEIGHTS     = WEIGHTS_REFINED   # refined = SOTA flying-object model
+DEFAULT_WEIGHTS     = WEIGHTS_GENERALIZED   # refined = SOTA flying-object model
 
 DETECTOR_BACKEND = "remote"   # "null" | "local" | "remote"
 CONF_THRESHOLD   = 0.5      # minimum detection confidence to keep
