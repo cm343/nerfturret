@@ -212,6 +212,52 @@ def test_fire_modes_cycle_the_loader(cfg, mode, expected):
     run(body())
 
 
+def test_loader_waits_at_ready_and_only_goes_back_when_empty(cfg):
+    cfg.set_many({'loader.ready': 20, 'loader.magazine': 2})   # stroke is 30
+    async def body():
+        async with Rig(cfg) as r:
+            ready = r.ctrl.to_steps('loader', 20)
+            stroke = r.ctrl.to_steps('loader', 30)
+            pulses = lambda: r.motion.worker.pins.pulses[AXIS_PINS['loader'].step]
+            loader = lambda: r.motion.axis(2)              # status snapshot: re-read
+            await r.cmd('arm')
+            await r.until(lambda: r.ctrl.state == 'ARMED')
+            await r.cmd('fire_start', mode='single')       # from rest
+            await r.until(lambda: not r.ctrl.firing)
+            await r.until(lambda: loader().pos == ready and not loader().moving)   # next dart staged
+            assert pulses() == 2 * stroke + ready
+            await r.cmd('fire_start', mode='single')       # last dart, from ready
+            await r.until(lambda: not r.ctrl.firing)
+            await asyncio.sleep(0.2)
+            assert r.ctrl.ammo == 0 and loader().pos == 0     # empty: stays fully back
+            assert pulses() == 2 * stroke + ready + (stroke - ready) + stroke
+            await r.cmd('reload')                           # first dart to the ready position
+            await r.until(lambda: loader().pos == ready and not loader().moving)
+    run(body())
+
+
+def test_loader_ready_off_keeps_waiting_at_rest(cfg):
+    async def body():
+        async with Rig(cfg) as r:
+            await r.cmd('reload')
+            await asyncio.sleep(0.1)
+            assert r.motion.axis(2).pos == 0 and not r.motion.axis(2).moving
+    run(body())
+
+
+def test_shutdown_returns_a_staged_loader_to_rest(cfg):
+    cfg.set_many({'loader.ready': 20})
+    async def body():
+        r = Rig(cfg)
+        await r.__aenter__()
+        await r.cmd('reload')
+        await r.until(lambda: r.motion.axis(2).pos == r.ctrl.to_steps('loader', 20)
+                      and not r.motion.axis(2).moving)
+        await r.__aexit__(None, None, None)               # ctrl.shutdown() inside
+        assert r.motion.axis(2).pos == 0
+    run(body())
+
+
 def test_auto_fire_stops_on_request_and_on_empty_magazine(cfg):
     cfg.set_many({'loader.magazine': 4})
     async def body():

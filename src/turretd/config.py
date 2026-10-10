@@ -106,6 +106,11 @@ SCHEMA: list[Param] = [
     # ── loader ───────────────────────────────────────────────────────────────
     Param('loader.stroke', 'Stroke', 'float', 240.0, '° motor', 10, 3600, 1,
           help='Motor rotation from rest to the front (dart pushed into the flywheels).'),
+    Param('loader.ready', 'Ready position', 'float', 0.0, '° motor', 0, 3600, 1,
+          help='Where the loader waits with the next dart, just short of where the flywheels '
+               'grab it, so a shot needs only the last bit of travel. It goes fully back after '
+               'each push to pick up the next dart, and stays back when the magazine is empty. '
+               '0 = always wait fully back.'),
     Param('loader.push_speed', 'Push speed', 'float', 540.0, '°/s', 10, 3600, 10),
     Param('loader.return_speed', 'Return speed', 'float', 540.0, '°/s', 10, 3600, 10),
     Param('loader.accel', 'Acceleration', 'float', 2160.0, '°/s²', 50, 50000, 50),

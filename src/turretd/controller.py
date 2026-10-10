@@ -204,6 +204,19 @@ class Controller:
         self._tasks.append(asyncio.create_task(self._tick_loop()))
 
     async def shutdown(self) -> None:
+        # The next start assumes the loader is fully back: put it there first.
+        st = self.motion.axis(AXIS_INDEX['loader'])
+        if (self.referenced['loader'] and st.pos != 0 and self.motion.alive
+                and self.estop_reason is None):
+            for t in (self.fire_task,):
+                if t is not None and not t.done():
+                    t.cancel()
+            self.motion.send('goto', AXIS_INDEX['loader'], 0,
+                             self.speed_steps('loader', self.cfg['loader.return_speed']))
+            end = self.clock() + 1.5
+            while self.clock() < end and (self.motion.axis(AXIS_INDEX['loader']).pos != 0
+                                          or self.motion.axis(AXIS_INDEX['loader']).moving):
+                await asyncio.sleep(0.01)
         self.estop('turretd shutting down', quiet=True)
         for t in self._tasks:
             t.cancel()
@@ -259,6 +272,24 @@ class Controller:
         self.state = 'DISARMED'
         if was:
             self.emit('info', reason)
+
+    def _ready_steps(self) -> int:
+        """Loader waiting position: the ready position while there is a dart to
+        stage (0 = fully back when the feature is off or the magazine is empty)."""
+        ready = self.cfg['loader.ready']
+        if ready <= 0 or ready >= self.cfg['loader.stroke']:
+            return 0
+        if self.cfg['loader.magazine'] > 0 and self.ammo <= 0:
+            return 0
+        return self.to_steps('loader', ready)
+
+    def _park_loader(self) -> None:
+        """Move the loader to where it should wait (non-blocking)."""
+        st = self.motion.axis(AXIS_INDEX['loader'])
+        target = self._ready_steps()
+        if self.referenced['loader'] and st.pos != target and self.estop_reason is None:
+            self.motion.send('goto', AXIS_INDEX['loader'], target,
+                             self.speed_steps('loader', self.cfg['loader.return_speed']))
 
     def _return_loader(self) -> None:
         st = self.motion.axis(AXIS_INDEX['loader'])
@@ -343,6 +374,7 @@ class Controller:
         front = self.to_steps('loader', stroke)
         push_deg = c['loader.push_speed'] * speed_scale
         back_deg = c['loader.return_speed'] * speed_scale
+        # Starts from rest or from the ready position (dart already staged).
         self.motion.send('goto', i, front, self.speed_steps('loader', push_deg))
         await self._wait_loader(front, 2 + 3 * self._move_time(stroke, push_deg, c['loader.accel']),
                                 require_armed)
@@ -400,6 +432,7 @@ class Controller:
             return
         finally:
             self.fire_stop_requested = False
+        self._park_loader()                       # stage the next dart, or stay back if empty
         self.emit('info', f'{verb} {fired}' + ('' if wheels else ' (flywheels off)'))
 
     # ── commands ─────────────────────────────────────────────────────────────
@@ -498,6 +531,8 @@ class Controller:
 
     async def _cmd_reload(self, cmd) -> None:
         self.ammo = self.cfg['loader.magazine']
+        if not self.firing:
+            self._park_loader()                   # bring the first dart to the ready position
 
     def _speed_factor(self, axis: str, speed: str) -> float:
         if speed == 'fast' and self.referenced[axis]:
@@ -634,6 +669,15 @@ class Controller:
         self.set_config({'loader.stroke': stroke})
         self.emit('info', f'loader stroke = {stroke}° (motor)')
 
+    async def _cmd_loader_set_ready(self, cmd) -> None:
+        if not self.referenced['loader']:
+            raise CommandError('set the rest position first')
+        ready = round(self.position_deg('loader'), 1)
+        if not 0 < ready < self.cfg['loader.stroke']:
+            raise CommandError('jog the loader between rest and front first')
+        self.set_config({'loader.ready': ready})
+        self.emit('info', f'loader ready position = {ready}° (motor)')
+
     async def _cmd_loader_test(self, cmd) -> None:
         """One push-and-return without flywheels (DISARMED only) to check the stroke."""
         if self.state != 'DISARMED' or self.firing:
@@ -645,6 +689,7 @@ class Controller:
         async def cycle():
             try:
                 await self._loader_cycle(speed_scale=0.25, require_armed=False)
+                self._park_loader()
                 self.emit('info', 'loader test stroke done')
             except (_Abort, asyncio.CancelledError):
                 if self.estop_reason is None:

@@ -460,6 +460,7 @@ $('#cal-loader-jog').append(...[-90, -10, -1, 1, 10, 90].map((d) =>
     (d > 0 ? '+' : '') + d + '°')));
 $('#cal-rest').addEventListener('click', () => send('loader_set_rest').catch(() => {}));
 $('#cal-front').addEventListener('click', () => send('loader_set_stroke').catch(() => {}));
+$('#cal-ready').addEventListener('click', () => send('loader_set_ready').catch(() => {}));
 $('#cal-test').addEventListener('click', () => send('loader_test').catch(() => {}));
 $('#cal-cross').addEventListener('click', () => setClickMode('crosshair', 'Click where the dart hit'));
 $('#cal-cross-reset').addEventListener('click', () => setConfig({ 'camera.crosshair_x': 0, 'camera.crosshair_y': 0 }));
@@ -612,7 +613,8 @@ function renderTelemetry() {
   $('#hud-cam').textContent = cam ? `${cam.size[0]}×${cam.size[1]} · ${fmt(cam.fps, 0)} fps` : 'no camera';
 
   if (!$('#tab-diag').hidden) renderDiag(t);
-  $('#cal-loader-info').textContent = `Loader at ${fmt(t.axes.loader.pos, 1)}° · stroke ${fmt(S.values['loader.stroke'], 0)}°`;
+  $('#cal-loader-info').textContent = `Loader at ${fmt(t.axes.loader.pos, 1)}° · stroke ${fmt(S.values['loader.stroke'], 0)}°`
+    + ` · ready ${S.values['loader.ready'] > 0 ? fmt(S.values['loader.ready'], 0) + '°' : 'off'}`;
 }
 
 function renderDiag(t) {
