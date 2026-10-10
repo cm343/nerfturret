@@ -158,6 +158,8 @@ SCHEMA: list[Param] = [
     Param('aim.max_iter', 'Max corrections', 'int', 3, '', 1, 10, 1),
     Param('aim.settle', 'Settle time', 'int', 150, 'ms', 0, 2000, 10,
           help='Wait after the turret stops before measuring: vibration and motion blur.'),
+    Param('aim.settle_max', 'Max settle wait', 'int', 1000, 'ms', 0, 5000, 50,
+          help='While the image is still blurred, keep waiting for a sharp frame this long.'),
     Param('aim.patch', 'Feature size', 'int', 31, 'px', 11, 101, 2,
           help='Template size on the 640 px wide tracking image.'),
     Param('aim.search', 'Search radius', 'float', 25.0, '% width', 5, 60, 1,

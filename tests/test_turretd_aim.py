@@ -125,3 +125,19 @@ def test_fov_calibration_recovers_the_true_fov(cfg, axis, true_fov, x, y):
             await r.until(lambda: not r.motion.axis(r.ctrl.axis_index(axis)).moving)
             assert r.ctrl.position_deg(axis) == pytest.approx(0, abs=0.05)   # returned
     run(body())
+
+
+def test_failed_calibration_says_why_each_sweep_stopped(cfg, tmp_path, monkeypatch):
+    import turretd.aim as aim
+    monkeypatch.setattr(aim, 'DEBUG_DIR', str(tmp_path / 'dbg'))
+    cfg.set_many({'aim.min_score': 0.99})                     # nothing ever matches
+    async def body():
+        async with CamRig(cfg) as r:
+            await r.settled()
+            await r.cmd('fov_calibrate', axis='pan', x=0.1, y=0.2)
+            st = await wait_aim(r, timeout=30)
+            assert st['state'] == 'failed'
+            assert '+ after 0 steps: match too weak' in st['msg']
+            assert '− after 0 steps: match too weak' in st['msg']
+            assert len(list((tmp_path / 'dbg').iterdir())) == 2      # one image per side
+    run(body())

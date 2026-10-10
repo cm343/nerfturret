@@ -55,6 +55,7 @@ class Patch:
     y: float
     texture: float
     sharp: float
+    frame_shape: tuple = (0, 0)        # (h, w) of the frame it was cut from
 
 
 def make_patch(gray: np.ndarray, x: float, y: float, half: int) -> Optional[Patch]:
@@ -74,7 +75,7 @@ def rescaled(patch: Patch, sx: float, sy: float) -> Patch:
     h, w = patch.img.shape
     nw, nh = max(5, int(round(w * sx)) | 1), max(5, int(round(h * sy)) | 1)
     img = cv2.resize(patch.img, (nw, nh), interpolation=cv2.INTER_AREA if sx < 1 else cv2.INTER_LINEAR)
-    return Patch(img, patch.x, patch.y, texture(img), sharpness(img))
+    return Patch(img, patch.x, patch.y, texture(img), sharpness(img), patch.frame_shape)
 
 
 def lens_scale(frac_from: float, frac_to: float, fov_deg: float) -> float:
