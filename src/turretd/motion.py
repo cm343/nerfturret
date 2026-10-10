@@ -379,7 +379,9 @@ class MotionWorker:
             self.pins.write(p.dir, level)
             self.dir_level[i] = level
             _busy_wait(_DIR_SETUP_S)
-        for _ in range(abs(steps)):
+        for k in range(abs(steps)):
+            if k:
+                _busy_wait(_STEP_PULSE_S)       # DRV8825: STEP low ≥ 1.9 µs too
             self.pins.write(p.step, 1)
             _busy_wait(_STEP_PULSE_S)
             self.pins.write(p.step, 0)
