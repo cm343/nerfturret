@@ -18,6 +18,7 @@ pinhole field of view to all of them. No feature needs to be picked.
 """
 
 import asyncio
+import functools
 import os
 import time
 from typing import Optional
@@ -26,6 +27,7 @@ try:
     from . import tracker                  # needs OpenCV: sudo apt install python3-opencv
 except ImportError:                        # without it, click-to-aim stays open-loop
     tracker = None
+from .follow import Follower
 
 DEBUG_DIR = os.environ.get('TURRETD_TRACK_DEBUG', '/tmp/turret-track')
 DEBUG_KEEP = 30
@@ -44,6 +46,7 @@ class Aimer:
         self.still_since: Optional[float] = time.monotonic()
         # Shown in telemetry: what the tracker did last and where the feature is.
         self.status: dict = {'busy': None, 'state': 'idle', 'msg': '', 'point': None}
+        self.follower = Follower(ctrl, self)
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     @property
@@ -56,7 +59,9 @@ class Aimer:
                 and hasattr(self.c.camera, 'gray_after'))
 
     def tick(self) -> None:
-        """Called from the controller tick: track when pan/tilt came to rest."""
+        """Called from the controller tick: track when pan/tilt came to rest,
+        and keep the turret position history for follow mode."""
+        self.follower.sample_pose()
         if self._moving():
             self.still_since = None
         elif self.still_since is None:
@@ -65,11 +70,24 @@ class Aimer:
     def _moving(self) -> bool:
         return any(self.c.motion.axis(self.c.axis_index(a)).moving for a in ('pan', 'tilt'))
 
+    @property
+    def following(self) -> bool:
+        return self.status.get('busy') == 'follow' and self.task is not None and not self.task.done()
+
     def cancel(self) -> None:
         if self.task is not None and not self.task.done():
+            was = self.status.get('busy')
             self.task.cancel()
-            self._set('idle', 'cancelled')
+            self._set('idle', 'follow stopped' if was == 'follow' else 'cancelled')
         self.task = None
+
+    def stop_follow(self) -> None:
+        """Stop button: end following and bring pan/tilt to a ramped stop."""
+        if self.following:
+            self.cancel()
+            for a in ('pan', 'tilt'):
+                self.c.motion.send('stop', self.c.axis_index(a))
+            self.c.emit('info', 'aim: follow stopped')
 
     def _set(self, state: str, msg: str = '', busy=None, point=None) -> None:
         self.status = {'busy': busy, 'state': state, 'msg': msg, 'point': point,
@@ -160,21 +178,29 @@ class Aimer:
         loop = asyncio.get_running_loop()
         t_min = since + self.cfg['aim.settle'] / 1000
         deadline = since + max(self.cfg['aim.settle_max'], self.cfg['aim.settle']) / 1000
-        ref_sharp = tracker.sharpness(ref) if ref is not None else 0.0
+        ref_sharp = await self.cpu(tracker.sharpness, ref) if ref is not None else 0.0
         while True:
             got = await loop.run_in_executor(None, self.c.camera.gray_after, t_min, 2.0)
             if got is None:
                 raise AimAbort('no camera frames')
             ts, gray = got
             if (ref_sharp <= 0 or ts >= deadline
-                    or tracker.sharpness(gray) >= self.cfg['aim.min_sharp'] * ref_sharp):
+                    or await self.cpu(tracker.sharpness, gray) >= self.cfg['aim.min_sharp'] * ref_sharp):
                 return gray, ts - since
             t_min = ts + 1e-3
 
-    def _scene(self, ref, cur, expect: tuple[float, float]):
+    @staticmethod
+    async def cpu(fn, *args, **kw):
+        """Run image processing in a worker thread: tens of ms on the Pi must not
+        stall the event loop (heartbeats, watchdog, commands, telemetry)."""
+        return await asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(fn, *args, **kw))
+
+    async def _scene(self, ref, cur, expect: tuple[float, float]):
         """Scene motion, rejected unless it roughly agrees with the commanded turn."""
-        sm = tracker.scene_motion(ref, cur, self.cfg['camera.hfov'], self.cfg['camera.vfov'],
-                                  min_points=int(self.cfg['aim.min_points']), expect=expect)
+        sm = await self.cpu(tracker.scene_motion, ref, cur, self.cfg['camera.hfov'],
+                            self.cfg['camera.vfov'], min_points=int(self.cfg['aim.min_points']),
+                            expect=expect)
         if sm.ok and not (tracker.plausible(sm.d_pan, expect[0])
                           and tracker.plausible(sm.d_tilt, expect[1])):
             sm.ok = False
@@ -199,6 +225,12 @@ class Aimer:
         self.cancel()
         cx, cy = self.cfg['camera.crosshair_x'], self.cfg['camera.crosshair_y']
         u, v = x + cx, y + cy
+        if self.cfg['aim.mode'] == 'follow':
+            if not self.available:
+                raise AimAbort('no camera' if tracker is not None else 'OpenCV not installed on the Pi')
+            self._set('following', 'locking on…', busy='follow', point=[u, v])
+            self._start(self.follower.run(u, v))
+            return 'follow'
         ref, why = None, ''
         if self.cfg['aim.mode'] == 'auto':
             if not self.available:
@@ -238,7 +270,7 @@ class Aimer:
             for it in range(int(self.cfg['aim.max_iter']) + 1):
                 since = await self._wait_still()
                 cur, settle_s = await self._sharp_frame(ref, since)
-                sm = self._scene(ref, cur, commanded)
+                sm = await self._scene(ref, cur, commanded)
                 notes = []
                 if sm.ok:
                     d_p, d_t = sm.at(tracker.from_angle(alpha, hfov), tracker.from_angle(beta, vfov))
@@ -250,7 +282,7 @@ class Aimer:
                     radius = (0.03 if sm.ok else self.cfg['aim.search'] / 100) * w
                     pp = tracker.rescaled(patch, tracker.lens_scale(patch.u, pu, hfov),
                                           tracker.lens_scale(patch.v, pv, vfov))
-                    m = self._find(cur, pp, ex, ey, radius)
+                    m = await self.cpu(self._find, cur, pp, ex, ey, radius)
                     if m is not None and m.ok:
                         mu, mv = self._norm(cur, m.x, m.y)
                         if sm.ok:
@@ -329,7 +361,7 @@ class Aimer:
                         stops.append(f'{side}: soft limit after {k} steps')
                         break
                     expect = (pos - prev, 0.0) if axis == 'pan' else (0.0, pos - prev)
-                    sm = self._scene(ref, cur, expect)
+                    sm = await self._scene(ref, cur, expect)
                     if sm.p0 is None or len(sm.p0) < self.cfg['aim.min_points']:
                         stops.append(f'{side} step {k + 1}: {sm.reason}')
                         break
@@ -345,7 +377,7 @@ class Aimer:
             if n_ok < 3:
                 raise AimAbort(f'only {n_ok} usable steps. ' + '; '.join(stops))
             # Pan points move along x for a pan step (tilt: y); the fit ignores sign.
-            fov, _sign, rms, n = tracker.fit_fov_pairs(thetas, a0, a1)
+            fov, _sign, rms, n = await self.cpu(tracker.fit_fov_pairs, thetas, a0, a1)
             if rms > self.cfg['aim.cal_max_rms']:
                 raise AimAbort(f'fit too poor ({rms:.3f}° rms over {n} pairs) — wobble, skipped '
                                'steps, or a moving scene')

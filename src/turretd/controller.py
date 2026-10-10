@@ -588,7 +588,10 @@ class Controller:
             x, y = float(cmd.get('x', 0)), float(cmd.get('y', 0))
         except (TypeError, ValueError):
             raise CommandError('x and y must be numbers') from None
-        return {'mode': await self.aim.click(x, y)}
+        try:
+            return {'mode': await self.aim.click(x, y)}
+        except AimAbort as e:
+            raise CommandError(str(e)) from None
 
     async def _cmd_fov_calibrate(self, cmd) -> None:
         """Automatic FOV calibration: step the axis, track the whole scene."""
@@ -600,7 +603,10 @@ class Controller:
             raise CommandError(str(e)) from None
 
     async def _cmd_aim_cancel(self, cmd) -> None:
-        self.aim.cancel()
+        if self.aim.following:
+            self.aim.stop_follow()
+        else:
+            self.aim.cancel()
 
     async def _cmd_set_zero(self, cmd) -> None:
         axis = self._axis(cmd, AIM_AXES)

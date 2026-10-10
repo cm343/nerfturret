@@ -155,9 +155,10 @@ SCHEMA: list[Param] = [
           help='OV5647: 41.4° at 4:3, about 30° for 16:9 resolutions.'),
 
     # ── aim & tracking ───────────────────────────────────────────────────────
-    Param('aim.mode', 'Click to aim', 'enum', 'auto', choices=('open', 'auto'),
-          help='open: one move computed from the field of view. auto: same move, then '
-               'track the clicked spot and correct, when it is trackable.'),
+    Param('aim.mode', 'Click to aim', 'enum', 'auto', choices=('open', 'auto', 'follow'),
+          help='open: one move computed from the field of view. auto (Refine): same move, '
+               'then measure and correct. follow: lock onto the clicked object and keep '
+               'the turret on it (with lead) until Stop or another click.'),
     Param('aim.tolerance', 'Aim tolerance', 'float', 0.1, '°', 0.01, 2, 0.01,
           help='Stop correcting once the spot is this close to the crosshair.'),
     Param('aim.max_iter', 'Max corrections', 'int', 3, '', 1, 10, 1),
@@ -181,6 +182,23 @@ SCHEMA: list[Param] = [
           help='Sharpness of the match relative to the reference. Low = blurred.'),
     Param('aim.min_points', 'Min. scene features', 'int', 20, '', 5, 200, 1,
           help='Consistent features needed to trust a scene-motion measurement.'),
+    Param('aim.target_distance', 'Target distance', 'float', 5.0, 'm', 0.5, 30, 0.5,
+          help='Follow mode: lead = distance / dart speed + latency.'),
+    Param('aim.dart_speed', 'Dart speed', 'float', 25.0, 'm/s', 5, 100, 1),
+    Param('aim.follow_latency', 'Follow latency', 'float', 0.05, 's', 0, 0.5, 0.01,
+          help='Added to the lead: time for the turret to respond to a new aim point.'),
+    Param('aim.follow_tolerance', 'On-target tolerance', 'float', 0.5, '°', 0.05, 5, 0.05,
+          help='Follow mode: the indicator turns green when the aim error stays below this…'),
+    Param('aim.follow_frames', 'On-target frames', 'int', 5, '', 1, 60, 1,
+          help='…for this many frames in a row.'),
+    Param('aim.follow_patch', 'Follow template size', 'int', 25, 'px', 11, 101, 2,
+          help='Roughly the size of the object on the 640 px tracking image.'),
+    Param('aim.follow_min_score', 'Follow min. match', 'float', 0.6, '', 0.3, 0.99, 0.01),
+    Param('aim.follow_lost', 'Give up after', 'float', 1.0, 's', 0.1, 10, 0.1,
+          help='Follow mode: stop when the object has not been found for this long.'),
+    Param('aim.click_latency', 'Video delay', 'int', 150, 'ms', 0, 1000, 10,
+          help='How old the video frame you click on is; follow mode cuts the target from '
+               'the buffered frame of that time.'),
     Param('aim.cal_step', 'FOV calibration step', 'float', 2.0, '°', 0.5, 10, 0.5),
     Param('aim.cal_steps', 'FOV calibration steps', 'int', 5, 'per side', 2, 20, 1),
     Param('aim.cal_max_rms', 'FOV fit tolerance', 'float', 0.05, '° rms', 0.005, 2, 0.005,

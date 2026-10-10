@@ -68,6 +68,16 @@ h3 { margin: 0 0 6px; font-size: 14px; }
 .track-mark { position: absolute; width: 26px; height: 26px; transform: translate(-50%, -50%); border: 2px solid #5ee08a; border-radius: 3px; pointer-events: none; }
 .track-mark.busy { border-color: var(--accent); border-style: dashed; }
 button.mini { font-size: 11px; padding: 1px 7px; margin-left: 4px; }
+.aim-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; }
+.mini-seg button { padding: 3px 12px; font-size: 13px; }
+.aim-bar .dist { display: flex; align-items: center; gap: 6px; }
+.aim-bar .dist input { width: 140px; }
+button.stop { border-color: var(--danger); color: var(--danger); font-size: 13px; padding: 3px 12px; }
+.lock { font-weight: 750; letter-spacing: .08em; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--muted); color: var(--muted); }
+.lock.on { background: #2fbf63; border-color: #2fbf63; color: #04140a; }
+.fire.on-target { box-shadow: 0 0 0 3px #2fbf63; }
+.track-mark.follow { border-color: #ffb347; border-radius: 50%; }
+.track-mark.follow.on { border-color: #2fbf63; border-width: 3px; }
 .hud-tl { left: 8px; top: 8px; } .hud-tr { right: 8px; top: 8px; text-align: right; } .hud-bl { left: 8px; bottom: 8px; color: var(--muted); }
 .cam-msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; background: rgba(0, 0, 0, .45); color: var(--warn); font-size: 15px; pointer-events: none; }
 .click-mode { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); background: var(--accent); color: #031426; font-weight: 600; padding: 4px 12px; border-radius: 6px; pointer-events: none; }

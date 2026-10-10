@@ -64,7 +64,7 @@ class AxisKinematics:
         self.pos = 0
         self.v = 0.0
         self.phase = 0.0
-        self.mode = 'idle'           # idle | vel | pos
+        self.mode = 'idle'           # idle | vel | pos | track
         self.v_cmd = 0.0             # velocity-mode target
         self.target = 0              # position-mode target
         self.vmax = float(vmax)      # position-mode cruise speed
@@ -72,6 +72,9 @@ class AxisKinematics:
         self.lo: Optional[int] = None
         self.hi: Optional[int] = None
         self.free = False            # current goto ignores the soft limits
+        self.track_pos = 0.0         # track mode: moving target position (µsteps, float)…
+        self.track_vel = 0.0         # …and its velocity (µsteps/s)
+        self.dt_hint = 0.0           # recent worst tick length (decays), for braking
 
     # ── commands ─────────────────────────────────────────────────────────────
     def set_limits(self, lo: Optional[int], hi: Optional[int]) -> None:
@@ -89,7 +92,7 @@ class AxisKinematics:
     def velocity(self, v: float) -> None:
         """Run at signed speed v (µsteps/s); 0 = ramp down and stop."""
         if v == 0:
-            if self.mode == 'pos':
+            if self.mode in ('pos', 'track'):
                 # Stop as soon as possible: target = where the decel ramp ends.
                 d = self.v * self.v / (2 * self.accel) if self.accel else 0
                 self.goto(self.pos + int(math.copysign(math.ceil(d), self.v)), max(abs(self.v), 1))
@@ -114,9 +117,21 @@ class AxisKinematics:
         self.vmax = max(1.0, float(vmax))
         self.mode = 'pos'
 
-    def _can_stop(self) -> bool:
-        """Slow enough to stop within _STOP_SLACK µsteps, i.e. stop on the spot."""
-        return self.v * self.v <= 2 * self.accel * _STOP_SLACK
+    def track(self, target: float, v_target: float, vmax: float) -> None:
+        """Follow a moving target: position `target` now, moving at v_target.
+        Between updates the target is extrapolated, so the axis matches its
+        speed instead of stopping at every update. Ends only by command."""
+        self.free = False
+        self.track_pos, self.track_vel = float(target), float(v_target)
+        self.vmax = max(1.0, float(vmax))
+        self.mode = 'track'
+
+    def _can_stop(self, d: float, dt: float) -> bool:
+        """Could the axis have stopped within d µsteps (+ _STOP_SLACK) if it had
+        started braking at the start of this tick? A late tick (loop jitter)
+        mustn't turn a normal arrival into an overshoot; only a target moved
+        inside the braking distance should."""
+        return self.v * self.v <= 2 * self.accel * (abs(d) + abs(self.v) * dt + _STOP_SLACK)
 
     def halt(self) -> None:
         """Stop instantly (no ramp): emergency stop."""
@@ -132,20 +147,39 @@ class AxisKinematics:
         return self.mode != 'idle'
 
     # ── simulation step ──────────────────────────────────────────────────────
+    def _brake_speed(self, d: float) -> float:
+        """Highest speed from which the axis still stops within d µsteps when the
+        next tick may take dt_hint: v·dt + v²/2a ≤ d. (The continuous √(2ad)
+        arrives too fast whenever a tick runs late.)"""
+        a, dt = self.accel, self.dt_hint
+        return -a * dt + math.sqrt(a * a * dt * dt + 2 * a * d)
+
     def _desired_velocity(self) -> float:
         if self.mode == 'vel':
             return self.v_cmd
+        if self.mode == 'track':
+            # feed-forward the target speed + close the gap along the decel curve
+            d = self.track_pos - self.pos
+            corr = 0.0 if abs(d) < 1 else math.copysign(self._brake_speed(abs(d) - 1), d)
+            return max(-self.vmax, min(self.vmax, self.track_vel + corr))
         if self.mode == 'pos':
             d = self.target - self.pos
             if d == 0:
                 return 0.0
-            return math.copysign(min(self.vmax, math.sqrt(2 * self.accel * abs(d))), d)
+            return math.copysign(min(self.vmax, self._brake_speed(abs(d))), d)
         return 0.0
 
     def update(self, dt: float) -> int:
         """Advance by dt seconds. Returns the signed number of steps to emit."""
         if self.mode == 'idle':
             return 0
+        self.dt_hint = max(dt, 0.95 * self.dt_hint)
+        if self.mode == 'track':
+            self.track_pos += self.track_vel * dt
+            lim = self._clamp(int(self.track_pos))
+            if lim != int(self.track_pos):              # target ran into a soft limit
+                self.track_pos, self.track_vel = float(lim), 0.0
+            self.target = int(self.track_pos)
         v_des = self._desired_velocity()
         dv = self.accel * dt
         self.v += max(-dv, min(dv, v_des - self.v))
@@ -156,7 +190,7 @@ class AxisKinematics:
             d = self.target - self.pos
             # Land on the target if we can stop there; too fast (target moved
             # inside the stopping distance) → run past it and come back.
-            if steps * d > 0 and abs(steps) >= abs(d) and self._can_stop():
+            if steps * d > 0 and abs(steps) >= abs(d) and self._can_stop(d, dt):
                 steps = d
         if steps and not (self.mode == 'pos' and self.free):
             # Block motion beyond a soft limit (never jump back if already past it).
@@ -172,7 +206,7 @@ class AxisKinematics:
 
         # The sqrt ramp brings v near zero at the target, so stopping there is
         # smooth; for tiny moves it simply ends on arrival.
-        if self.mode == 'pos' and self.pos == self.target and self._can_stop():
+        if self.mode == 'pos' and self.pos == self.target and self._can_stop(0, dt):
             self.halt()
         elif self.mode == 'vel' and self.v_cmd == 0 and abs(self.v) <= dv:
             self.halt()
@@ -309,6 +343,9 @@ class MotionWorker:
         elif op == 'goto':
             self._enable(i, True)
             ax.goto(cmd[2], cmd[3])
+        elif op == 'track':                 # (i, target µsteps, target µsteps/s, vmax)
+            self._enable(i, True)
+            ax.track(cmd[2], cmd[3], cmd[4])
         elif op == 'move_by':
             self._enable(i, True)
             ax.goto(ax.pos + int(cmd[2]), cmd[3])

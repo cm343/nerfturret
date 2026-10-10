@@ -254,3 +254,38 @@ def test_limits_set_while_outside_do_not_jump():
     steps = run(ax, 2.0)
     assert ax.pos == 300
     assert max(abs(s) for s in steps) <= 1
+
+
+def test_track_matches_a_moving_target_without_stopping():
+    ax = AxisKinematics(accel=4000)
+    ax.track(200, 500, 2000)                  # target 200 steps ahead, moving at 500/s
+    run(ax, 1.0)
+    assert ax.mode == 'track'
+    assert ax.v == pytest.approx(500, abs=30)             # matched its speed
+    assert abs(ax.track_pos - ax.pos) <= 3               # and caught up
+    ax.velocity(0)                                        # stop: ramped, then idle
+    run(ax, 1.0)
+    assert not ax.moving
+
+
+def test_track_target_stops_at_a_soft_limit():
+    ax = AxisKinematics(accel=4000)
+    ax.set_limits(None, 300)
+    ax.track(0, 1000, 2000)
+    run(ax, 2.0)
+    assert ax.pos == 300 and ax.track_vel == 0
+
+
+def test_late_ticks_do_not_cause_overshoot():
+    """Loop jitter: irregular, sometimes long ticks must still land exactly."""
+    import random
+    rnd = random.Random(3)
+    for target in (133, 798, 3000):
+        ax = AxisKinematics(accel=20000)
+        ax.goto(target, 5000)
+        steps = []
+        for _ in range(20000):
+            steps.append(ax.update(rnd.choice([0.0002, 0.0005, 0.001, 0.004, 0.012])))
+            if not ax.moving:
+                break
+        assert ax.pos == target and all(s >= 0 for s in steps)

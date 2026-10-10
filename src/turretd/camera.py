@@ -16,6 +16,7 @@ gray_after(t) returns the first one exposed after t, so callers can wait
 until the turret has stopped and settled before they measure anything.
 """
 
+import collections
 import io
 import math
 import threading
@@ -25,6 +26,7 @@ from typing import Callable, Optional
 PLACEHOLDER_AFTER_S = 2.0
 PLACEHOLDER_FPS = 2.0
 GRAY_MAX_WIDTH = 640
+GRAY_RING = 24                    # ~0.8 s of tracking frames kept for look-back
 
 _QUALITY_JPEG = {'low': 50, 'medium': 70, 'high': 85, 'very_high': 95}
 
@@ -85,6 +87,9 @@ class CameraService:
         self.size = (0, 0)
         self.gray = None                     # latest tracking frame (uint8, h×w)
         self.gray_ts = 0.0                   # its exposure start, time.monotonic()
+        self.gray_exp = 0.0                  # its exposure time (s)
+        self.gray_ring = collections.deque(maxlen=GRAY_RING)   # (ts, exp, gray)
+        self.sim_t0 = None                   # sim: time origin of the drifting target
         self._cond = threading.Condition()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -108,10 +113,26 @@ class CameraService:
                     self._fps_count, self._fps_t0 = 0, now
             self._cond.notify_all()
 
-    def _publish_gray(self, gray, ts: float) -> None:
+    def _publish_gray(self, gray, ts: float, exposure: float = 0.0) -> None:
         with self._cond:
-            self.gray, self.gray_ts = gray, ts
+            self.gray, self.gray_ts, self.gray_exp = gray, ts, exposure
+            self.gray_ring.append((ts, exposure, gray))
             self._cond.notify_all()
+
+    def gray_since(self, t_min: float) -> list:
+        """Buffered tracking frames exposed at or after t_min, oldest first:
+        [(ts, exposure_s, gray), …] (at most the last ~0.8 s)."""
+        with self._cond:
+            return [f for f in self.gray_ring if f[0] >= t_min]
+
+    def gray_next(self, after_ts: float, timeout: float = 1.0):
+        """The next frame exposed after after_ts: (ts, exposure_s, gray) or None.
+        Blocking: call from a worker thread."""
+        with self._cond:
+            ok = self._cond.wait_for(
+                lambda: (self.gray is not None and self.gray_ts > after_ts) or self._stop.is_set(),
+                timeout)
+            return (self.gray_ts, self.gray_exp, self.gray) if ok and self.gray is not None else None
 
     def gray_after(self, t_min: float, timeout: float = 1.0):
         """First tracking frame exposed at or after t_min (monotonic): (ts, gray),
@@ -217,16 +238,18 @@ class CameraService:
         def on_request(request) -> None:
             # The Y plane of the YUV420 lores stream is the grayscale image.
             try:
-                ts = request.get_metadata().get('SensorTimestamp')
+                md = request.get_metadata()
+                ts = md.get('SensorTimestamp')
+                exp = md.get('ExposureTime', 0) / 1e6
                 y = request.make_array('lores')[:gh, :gw].copy()
             except Exception:  # noqa: BLE001 — never break the camera thread
                 return
             if ts is None:
-                service._publish_gray(y, time.monotonic() - 0.05)
+                service._publish_gray(y, time.monotonic() - 0.05, exp)
                 return
             if 'offset' not in clock:
                 clock['offset'] = _sensor_clock_offset(ts / 1e9)
-            service._publish_gray(y, ts / 1e9 + clock['offset'])
+            service._publish_gray(y, ts / 1e9 + clock['offset'], exp)
 
         cam.post_callback = on_request
         self._picam = cam
@@ -268,7 +291,7 @@ class CameraService:
         quality = _QUALITY_JPEG.get(self.params.get('camera.quality', 'high'), 85)
         scene = SimScene(self.params, (w, h))
         gw, gh = gray_size((w, h))
-        t0 = time.monotonic()
+        t0 = self.sim_t0 = time.monotonic()
         while not self._stop.wait(1.0 / fps):
             ts = time.monotonic()
             pan, tilt = self.view()
@@ -346,11 +369,20 @@ class SimScene:
             xi = np.clip(mx.astype(int), 0, ww - 1)
             yi = np.clip(my.astype(int), 0, wh - 1)
             frame = self.world[yi[:, None], xi[None, :]]
-        # the drifting target, drawn in image space
-        tx_deg, ty_deg = 20 * math.sin(t * 0.5) - pan, 8 * math.sin(t * 0.8) - tilt
+        # the drifting target (a red/white checker), drawn in image space
+        az, el = self.target_at(t)
+        tx_deg, ty_deg = az - pan, el - tilt
         if abs(tx_deg) < self.hfov / 2 and abs(ty_deg) < self.vfov / 2:
             tx = int((math.tan(math.radians(tx_deg)) / math.tan(math.radians(self.hfov) / 2) + 1) / 2 * w)
             ty = int((1 - math.tan(math.radians(ty_deg)) / math.tan(math.radians(self.vfov) / 2)) / 2 * h)
-            if 10 <= tx < w - 10 and 10 <= ty < h - 10:
-                frame[ty - 10:ty + 10, tx - 10:tx + 10] = (40, 60, 220)
+            r = max(10, w // 40)
+            if r <= tx < w - r and r <= ty < h - r:
+                frame[ty - r:ty + r, tx - r:tx + r] = (40, 60, 220)
+                frame[ty - r:ty, tx - r:tx] = (230, 230, 230)
+                frame[ty:ty + r, tx:tx + r] = (230, 230, 230)
         return frame
+
+    @staticmethod
+    def target_at(t: float) -> tuple[float, float]:
+        """True (azimuth, elevation) in ° of the drifting target at sim time t."""
+        return 20 * math.sin(t * 0.5), 8 * math.sin(t * 0.8)

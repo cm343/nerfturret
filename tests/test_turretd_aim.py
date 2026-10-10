@@ -18,6 +18,7 @@ TRUE_HFOV, TRUE_VFOV = 53.5, 30.1
 def cfg(tmp_path):
     c = ConfigStore(str(tmp_path))
     c.set_many({**FAST, 'camera.resolution': '640x480', 'aim.settle': 40,
+                'safety.watchdog_ms': 3000,
                 'camera.hfov': 60.0, 'camera.vfov': 34.0})       # deliberately wrong
     return c
 
@@ -41,7 +42,10 @@ class CamRig(Rig):
         await super().__aexit__(*exc)
 
     async def settled(self):
-        await asyncio.sleep(0.3)                       # turret at rest, frames fresh
+        """Turret at rest and a frame exposed after the settle time exists."""
+        await asyncio.sleep(0.05)
+        await self.until(lambda: self.ctrl.aim.still_since is not None and self.cam.gray_ts
+                         >= self.ctrl.aim.still_since + self.ctrl.cfg['aim.settle'] / 1000 + 0.05)
 
 
 def true_angle(frac, fov):
@@ -60,7 +64,7 @@ def test_auto_aim_corrects_a_wrong_fov(cfg):
             res = await r.cmd('aim_offset', x=0.55, y=0.4)
             assert res == {'mode': 'auto'}
             st = await wait_aim(r)
-            assert st['state'] == 'locked', st
+            assert st['state'] == 'locked', (st, [e['msg'] for e in r.events])
             assert any('tracking locked (spot + scene' in e['msg'] for e in r.events)
             pan, tilt = r.ctrl.position_deg('pan'), r.ctrl.position_deg('tilt')
             assert pan == pytest.approx(true_angle(0.55, TRUE_HFOV), abs=0.15)
@@ -149,9 +153,60 @@ def test_failed_calibration_says_why_each_sweep_stopped(cfg):
             await r.settled()
             await r.cmd('fov_calibrate', axis='pan')
             st = await wait_aim(r, timeout=30)
-            assert st['state'] == 'failed'
-            assert 'only 0 usable steps' in st['msg']
-            assert '+ step 1:' in st['msg'] and '− step 1:' in st['msg']
+            assert st['state'] == 'failed', (st, [e['msg'] for e in r.events])
+            assert 'usable steps' in st['msg']                 # fewer than 3
+            assert 'features' in st['msg']                     # …and why each sweep ended
             await r.until(lambda: not r.motion.axis(0).moving)
             assert r.ctrl.position_deg('pan') == pytest.approx(0, abs=0.05)
+    run(body())
+
+
+# ── follow mode ──────────────────────────────────────────────────────────────
+def _target_uv(r):
+    """Where the sim's moving target is in the latest frame (normalized)."""
+    from turretd.camera import SimScene
+    az, el = SimScene.target_at(r.cam.gray_ts - r.cam.sim_t0)
+    pan, tilt = r.ctrl.position_deg('pan'), r.ctrl.position_deg('tilt')
+    k_h = math.tan(math.radians(TRUE_HFOV) / 2)
+    k_v = math.tan(math.radians(TRUE_VFOV) / 2)
+    return math.tan(math.radians(az - pan)) / k_h, math.tan(math.radians(tilt - el)) / k_v
+
+
+def test_follow_keeps_the_turret_on_a_moving_target(cfg):
+    from turretd.camera import SimScene
+    import time as _t
+    cfg.set_many({'aim.mode': 'follow', 'camera.hfov': TRUE_HFOV, 'camera.vfov': TRUE_VFOV,
+                  'aim.click_latency': 0, 'aim.target_distance': 0.5, 'aim.dart_speed': 100,
+                  'aim.follow_latency': 0})                       # ~no lead: aim at the target
+    async def body():
+        async with CamRig(cfg) as r:
+            await r.settled()
+            u, v = _target_uv(r)
+            assert await r.cmd('aim_offset', x=u, y=v) == {'mode': 'follow'}
+            errs, green = [], False
+            for _ in range(40):                                   # 4 s
+                await asyncio.sleep(0.1)
+                st = r.ctrl.aim.status
+                assert st['state'] == 'following', st
+                green |= bool(st.get('on_target'))
+                az, el = SimScene.target_at(_t.monotonic() - r.cam.sim_t0)
+                errs.append(max(abs(r.ctrl.position_deg('pan') - az),
+                                abs(r.ctrl.position_deg('tilt') - el)))
+            tail = errs[10:]                                      # after 1 s: on it
+            assert sum(tail) / len(tail) < 0.6 and max(tail) < 1.5, errs
+            assert green
+            await r.cmd('aim_cancel')                             # Stop button
+            assert not r.ctrl.aim.following
+            assert r.ctrl.aim.status['msg'] == 'follow stopped'
+    run(body())
+
+
+def test_follow_needs_something_to_lock_on(cfg):
+    cfg.set_many({'aim.mode': 'follow', 'aim.min_texture': 50})
+    async def body():
+        async with CamRig(cfg) as r:
+            await r.settled()
+            await r.cmd('aim_offset', x=0.1, y=0.1)
+            await r.until(lambda: r.ctrl.aim.status['state'] == 'lost')
+            assert 'texture' in r.ctrl.aim.status['msg']
     run(body())

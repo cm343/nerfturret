@@ -36,6 +36,19 @@
       <div class="hud hud-br" id="hud-track" hidden></div>
       <div class="click-mode" id="click-mode" hidden></div>
     </div>
+    <div class="aim-bar">
+      <span class="muted">Click video:</span>
+      <div class="seg mini-seg" id="aim-mode" role="radiogroup" aria-label="Click to aim mode">
+        <button data-mode="open" title="One move computed from the field of view">Open</button>
+        <button data-mode="auto" title="Move, then measure and correct">Refine</button>
+        <button data-mode="follow" title="Lock onto the clicked object and keep the turret on it">Follow</button>
+      </div>
+      <label class="dist" id="dist-wrap" hidden>Distance
+        <input type="range" id="dist" min="0.5" max="30" step="0.5" aria-label="Target distance">
+        <span id="dist-val"></span></label>
+      <button class="mini stop" id="follow-stop" hidden>Stop follow</button>
+      <span class="lock" id="lock" hidden>ON TARGET</span>
+    </div>
     <div class="video-hint">
       <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move</span>
       <span><kbd>Shift</kbd> fast · <kbd>Alt</kbd> fine</span>
@@ -44,8 +57,7 @@
       <span><kbd>R</kbd> arm</span>
       <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> mode</span>
       <span><kbd>Esc</kbd> E-STOP</span>
-      <span>click video: aim there
-        <button class="mini" id="aim-mode" title="auto: after the move, track the clicked spot and correct">…</button></span>
+
     </div>
     <div class="log" id="log" aria-live="polite"></div>
   </section>

@@ -380,7 +380,10 @@ function onConfigChanged(keys, flash = false) {
   syncSliders();
   for (const b of document.querySelectorAll('#mode button')) b.setAttribute('aria-checked', b.dataset.mode === v['fire.mode']);
   renderCrosshair();
-  $('#aim-mode').textContent = S.values['aim.mode'] === 'auto' ? 'auto-refine: on' : 'auto-refine: off';
+  for (const b of document.querySelectorAll('#aim-mode button')) b.setAttribute('aria-checked', b.dataset.mode === v['aim.mode']);
+  $('#dist-wrap').hidden = v['aim.mode'] !== 'follow';
+  if (document.activeElement !== $('#dist')) $('#dist').value = v['aim.target_distance'];
+  $('#dist-val').textContent = `${fmt(v['aim.target_distance'], 1)} m`;
   const res = String(v['camera.resolution'] || '1280x720').split('x').map(Number);
   $('#video').style.aspectRatio = `${res[0]} / ${res[1]}`;
 }
@@ -475,15 +478,21 @@ function renderAxisCards(t) {
 }
 
 // ── click-aim mode and tracker status ───────────────────────────────────────
-$('#aim-mode').addEventListener('click', (ev) => {
-  ev.stopPropagation();
-  setConfig({ 'aim.mode': S.values['aim.mode'] === 'auto' ? 'open' : 'auto' });
-});
+for (const b of document.querySelectorAll('#aim-mode button')) {
+  b.addEventListener('click', () => setConfig({ 'aim.mode': b.dataset.mode }));
+}
+$('#dist').addEventListener('input', () => { $('#dist-val').textContent = `${fmt(Number($('#dist').value), 1)} m`; });
+$('#dist').addEventListener('change', () => setConfig({ 'aim.target_distance': Number($('#dist').value) }));
+$('#follow-stop').addEventListener('click', () => send('aim_cancel').catch(() => {}));
 
 let lastAimMsg = '';
 function renderAim(a) {
   const hud = $('#hud-track'), mark = $('#track-mark');
-  if (!a) { hud.hidden = true; mark.hidden = true; return; }
+  if (!a) {
+    hud.hidden = true; mark.hidden = true; $('#follow-stop').hidden = true; $('#lock').hidden = true;
+    $('#btn-fire').classList.remove('on-target');
+    return;
+  }
   const recent = a.t && Date.now() / 1000 - a.t < 8;
   hud.hidden = !(a.busy || (recent && a.msg));
   hud.textContent = a.msg;
@@ -493,7 +502,15 @@ function renderAim(a) {
     mark.style.left = `${50 + a.point[0] * 50}%`;
     mark.style.top = `${50 + a.point[1] * 50}%`;
   }
-  mark.classList.toggle('busy', !!a.busy);
+  mark.classList.toggle('busy', !!a.busy && a.busy !== 'follow');
+  const following = !!a.following;
+  mark.classList.toggle('follow', following);
+  mark.classList.toggle('on', following && !!a.on_target);
+  if (following) mark.hidden = !a.point;
+  $('#follow-stop').hidden = !following;
+  $('#lock').hidden = !following;
+  $('#lock').classList.toggle('on', following && !!a.on_target);
+  $('#btn-fire').classList.toggle('on-target', following && !!a.on_target);
   if (a.msg && a.msg !== lastAimMsg && !a.busy && a.state !== 'idle') {
     if (a.state === 'failed' || a.state === 'done') $('#fov-info').textContent = a.msg;
   }
