@@ -196,7 +196,8 @@ class CameraService:
                 # exposure start → now, for the latest tracking frame (sanity check
                 # of the sensor clock mapping: expect ~1–3 frame times)
                 'gray_age_ms': round((time.monotonic() - self.gray_ts) * 1000)
-                if self.gray is not None else None}
+                if self.gray is not None else None,
+                'exposure_ms': round(self.gray_exp * 1000, 1)}
 
     # ── picamera2 ────────────────────────────────────────────────────────────
     def _start_picam(self) -> None:
@@ -210,10 +211,15 @@ class CameraService:
         frame_us = int(1_000_000 / fps)
         cam = Picamera2()
         gw, gh = gray_size(self.size)
+        controls = {'FrameDurationLimits': (frame_us, frame_us)}
+        exp_ms = float(p.get('camera.exposure_ms', 0) or 0)
+        if exp_ms > 0:
+            # fixed shutter; auto exposure keeps adjusting the gain
+            controls['ExposureTime'] = int(min(exp_ms * 1000, frame_us))
         cfg = cam.create_video_configuration(
             main={'size': self.size, 'format': 'YUV420'},
             lores={'size': (gw, gh), 'format': 'YUV420'},
-            controls={'FrameDurationLimits': (frame_us, frame_us)},
+            controls=controls,
             transform=Transform(hflip=int(bool(p.get('camera.hflip'))),
                                 vflip=int(bool(p.get('camera.vflip')))),
         )

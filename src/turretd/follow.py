@@ -31,6 +31,8 @@ and tracked forward through the newer buffered frames to catch up.
 import asyncio
 import bisect
 import collections
+import csv
+import os
 import time
 from typing import Optional
 
@@ -39,7 +41,8 @@ try:
 except ImportError:
     tracker = None
 
-ALPHA, BETA = 0.5, 0.15          # alpha-beta filter gains (per measurement)
+ALPHA, BETA = 0.35, 0.05         # alpha-beta filter gains (per measurement): calm
+REFRESH_MAX_TURRET_SPEED = 10.0  # °/s: only refresh the template from sharp frames
 TEMPLATE_BLEND = 0.15            # template refresh weight on strong matches
 REFRESH_SCORE = 0.85
 
@@ -152,17 +155,22 @@ class Follower:
                 raise _Lost('too close to the frame edge')
             if patch.texture < cfg['aim.min_texture']:
                 raise _Lost(f'too little texture to follow ({patch.texture:.1f})')
+            anchor = patch.img                       # never changes: guards against drift
             tmpl = patch.img.astype('float32')
-            pose = self.turret_at(ts + exp / 2)
+            t_off = cfg['aim.frame_time_offset'] / 1000
+            pose = self.turret_at(ts + exp / 2 + t_off)
             if pose is None:
                 raise _Lost('no turret position history')
             az0 = pose[0] + tracker.frame_angle(u, hfov)
             el0 = pose[1] - tracker.frame_angle(v, vfov)
-            faz, fel = AlphaBeta(az0, ts + exp / 2), AlphaBeta(el0, ts + exp / 2)
+            faz, fel = AlphaBeta(az0, ts + exp / 2 + t_off), AlphaBeta(el0, ts + exp / 2 + t_off)
             last_ts, misses, good_run = ts, 0, 0
             pending = frames[1:]
-            speed = {ax: self.c.speed_steps(ax, cfg[f'{ax}.speed'] * cfg[f'{ax}.fast_factor'])
+            speed = {ax: self.c.speed_steps(ax, min(cfg['aim.follow_max_speed'],
+                                                    cfg[f'{ax}.speed'] * cfg[f'{ax}.fast_factor']))
                      for ax in ('pan', 'tilt')}
+            still = cfg['aim.follow_still_speed']
+            self.log = []
             self._status('following', 'locked on', point=[u, v])
             self.c.emit('info', 'aim: following target')
             while True:
@@ -176,29 +184,36 @@ class Follower:
                     ts, exp, gray = got
                 last_ts = ts
                 self.sample_pose()
-                t_mid = ts + exp / 2
-                pose = self.turret_at(t_mid)
-                pan_t, tilt_t = pose
+                t_mid = ts + exp / 2 + t_off
+                pan_t, tilt_t = self.turret_at(t_mid)
+                pan_b, tilt_b = self.turret_at(t_mid - 0.05)
+                turret_speed = max(abs(pan_t - pan_b), abs(tilt_t - tilt_b)) / 0.05
                 # 3. Where the filter expects the object in this frame.
                 az_p, el_p = faz.predict(t_mid), fel.predict(t_mid)
                 pu = tracker.from_angle(az_p - pan_t, hfov)
                 pv = tracker.from_angle(tilt_t - el_p, vfov)
                 radius = (0.05 + 0.04 * min(misses, 5)) * w \
                     + 2 * abs(faz.v) * (1 / 30) * w / hfov
-                p = tracker.Patch(tmpl.astype('uint8'), 0, 0, patch.texture,
-                                  tracker.sharpness(tmpl.astype('uint8')))
                 m = None
                 if abs(pu) < 1.2 and abs(pv) < 1.2:
-                    m = await self.a.cpu(tracker.find, gray, p, tracker.to_px(pu, w),
-                                         tracker.to_px(pv, h), radius,
-                                         min_score=cfg['aim.follow_min_score'],
-                                         min_margin=cfg['aim.min_margin'], min_sharp=0.0)
+                    # current (refreshed) template first, the original as fallback
+                    for img in (tmpl.astype('uint8'), anchor):
+                        p = tracker.Patch(img, 0, 0, patch.texture, tracker.sharpness(img))
+                        cand = await self.a.cpu(tracker.find, gray, p, tracker.to_px(pu, w),
+                                                tracker.to_px(pv, h), radius,
+                                                min_score=cfg['aim.follow_min_score'],
+                                                min_margin=cfg['aim.follow_min_margin'],
+                                                min_sharp=0.0)
+                        if m is None or (cand is not None and (cand.ok, cand.score) > (m.ok, m.score)):
+                            m = cand
+                        if m is not None and m.ok:
+                            break
                 if m is not None and m.ok:
                     misses = 0
                     mu, mv = tracker.to_norm(m.x, w), tracker.to_norm(m.y, h)
                     faz.update(pan_t + tracker.frame_angle(mu, hfov), t_mid)
                     fel.update(tilt_t - tracker.frame_angle(mv, vfov), t_mid)
-                    if m.score >= REFRESH_SCORE:
+                    if m.score >= REFRESH_SCORE and turret_speed < REFRESH_MAX_TURRET_SPEED:
                         cut = tracker.make_patch(gray, m.x, m.y, tmpl.shape[0] // 2)
                         if cut is not None:
                             tmpl = (1 - TEMPLATE_BLEND) * tmpl + TEMPLATE_BLEND * cut.img
@@ -210,19 +225,31 @@ class Follower:
                         why = m.reason if m is not None else 'out of view'
                         raise _Lost(f'target lost ({why})')
                 # 4. Aim error at this frame: where the turret pointed vs. where it should have.
+                # A target slower than `still` counts as standing: no lead from noise.
+                v_az = faz.v if abs(faz.v) >= still else 0.0
+                v_el = fel.v if abs(fel.v) >= still else 0.0
                 lead = self.lead_s()
-                want_pan = faz.predict(t_mid + lead) - a_cross
-                want_tilt = fel.predict(t_mid + lead) + b_cross
+                want_pan = faz.predict(t_mid) + v_az * lead - a_cross
+                want_tilt = fel.predict(t_mid) + v_el * lead + b_cross
                 err = max(abs(want_pan - pan_t), abs(want_tilt - tilt_t))
                 good_run = good_run + 1 if (point and err <= cfg['aim.follow_tolerance']) else 0
                 on_target = good_run >= int(cfg['aim.follow_frames'])
                 # 5. Command: the predicted direction at now + lead.
                 now = time.monotonic()
                 if not pending:
-                    for ax, f, off in (('pan', faz, -a_cross), ('tilt', fel, b_cross)):
+                    for ax, f, vel, off in (('pan', faz, v_az, -a_cross), ('tilt', fel, v_el, b_cross)):
                         spd = self.c.steps_per_deg(ax)
-                        self.c.motion.send('track', self.c.axis_index(ax),
-                                           (f.predict(now + lead) + off) * spd, f.v * spd, speed[ax])
+                        aim = f.x + vel * (now - f.t + lead) + off
+                        self.c.motion.send('track', self.c.axis_index(ax), aim * spd, vel * spd,
+                                           speed[ax], cfg['aim.follow_gain'])
+                self.log.append((round(t_mid, 4), round(exp * 1000, 1), round(pan_t, 3),
+                                 round(tilt_t, 3), round(turret_speed, 1),
+                                 int(bool(point)), *(point or ('', '')),
+                                 round(m.score, 3) if m else '', round(m.margin, 3) if m else '',
+                                 round(pan_t + tracker.frame_angle(point[0], hfov), 3) if point else '',
+                                 round(tilt_t - tracker.frame_angle(point[1], vfov), 3) if point else '',
+                                 round(faz.x, 3), round(faz.v, 2), round(fel.x, 3), round(fel.v, 2),
+                                 round(err, 3)))
                 self._status('following',
                              f'following: {err:.2f}° off' + (' — ON TARGET' if on_target else '')
                              + ('' if point else f' (coasting, {misses} frames)'),
@@ -236,6 +263,27 @@ class Follower:
             self.c.emit('warn', f'aim: follow stopped: {e}')
         # Cancelled (Stop button, new click, manual move, E-STOP): whoever
         # cancelled decides what the axes do next, so no stop is sent here.
+        finally:
+            self._save_log()
+
+    def _save_log(self) -> None:
+        """Per-frame record of the last follow run, for diagnosis."""
+        rows = getattr(self, 'log', None)
+        if not rows:
+            return
+        try:
+            from .aim import DEBUG_DIR
+            os.makedirs(DEBUG_DIR, exist_ok=True)
+            path = os.path.join(DEBUG_DIR, f'follow-{time.strftime("%H%M%S")}.csv')
+            with open(path, 'w', newline='') as f:
+                wr = csv.writer(f)
+                wr.writerow(['t', 'exp_ms', 'pan', 'tilt', 'turret_speed', 'found', 'u', 'v',
+                             'score', 'margin', 'az_meas', 'el_meas', 'az', 'az_v', 'el', 'el_v',
+                             'err'])
+                wr.writerows(rows)
+        except OSError:
+            pass
+        self.log = []
 
 
 class _Lost(Exception):

@@ -75,6 +75,7 @@ class AxisKinematics:
         self.track_pos = 0.0         # track mode: moving target position (µsteps, float)…
         self.track_vel = 0.0         # …and its velocity (µsteps/s)
         self.dt_hint = 0.0           # recent worst tick length (decays), for braking
+        self.track_gain = 6.0        # track mode: gap closing rate (1/s)
 
     # ── commands ─────────────────────────────────────────────────────────────
     def set_limits(self, lo: Optional[int], hi: Optional[int]) -> None:
@@ -117,13 +118,14 @@ class AxisKinematics:
         self.vmax = max(1.0, float(vmax))
         self.mode = 'pos'
 
-    def track(self, target: float, v_target: float, vmax: float) -> None:
+    def track(self, target: float, v_target: float, vmax: float, gain: float = 6.0) -> None:
         """Follow a moving target: position `target` now, moving at v_target.
         Between updates the target is extrapolated, so the axis matches its
         speed instead of stopping at every update. Ends only by command."""
         self.free = False
         self.track_pos, self.track_vel = float(target), float(v_target)
         self.vmax = max(1.0, float(vmax))
+        self.track_gain = max(0.1, float(gain))
         self.mode = 'track'
 
     def _can_stop(self, d: float, dt: float) -> bool:
@@ -158,9 +160,13 @@ class AxisKinematics:
         if self.mode == 'vel':
             return self.v_cmd
         if self.mode == 'track':
-            # feed-forward the target speed + close the gap along the decel curve
+            # Feed-forward the target speed and close the gap proportionally
+            # (gain · gap), never faster than the axis could still brake. The
+            # time-optimal braking curve alone over-corrects on noisy, delayed
+            # camera updates and makes the turret hunt around the target.
             d = self.track_pos - self.pos
-            corr = 0.0 if abs(d) < 1 else math.copysign(self._brake_speed(abs(d) - 1), d)
+            corr = 0.0 if abs(d) < 1 else math.copysign(
+                min(self.track_gain * (abs(d) - 1), self._brake_speed(abs(d) - 1)), d)
             return max(-self.vmax, min(self.vmax, self.track_vel + corr))
         if self.mode == 'pos':
             d = self.target - self.pos
@@ -343,9 +349,9 @@ class MotionWorker:
         elif op == 'goto':
             self._enable(i, True)
             ax.goto(cmd[2], cmd[3])
-        elif op == 'track':                 # (i, target µsteps, target µsteps/s, vmax)
+        elif op == 'track':                 # (i, target µsteps, µsteps/s, vmax[, gain 1/s])
             self._enable(i, True)
-            ax.track(cmd[2], cmd[3], cmd[4])
+            ax.track(*cmd[2:6])
         elif op == 'move_by':
             self._enable(i, True)
             ax.goto(ax.pos + int(cmd[2]), cmd[3])

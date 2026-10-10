@@ -143,6 +143,10 @@ SCHEMA: list[Param] = [
     Param('camera.fps', 'Frame rate', 'int', 30, 'fps', 5, 60, 1, apply='camera'),
     Param('camera.quality', 'JPEG quality', 'enum', 'high',
           choices=('low', 'medium', 'high', 'very_high'), apply='camera'),
+    Param('camera.exposure_ms', 'Exposure time', 'float', 0.0, 'ms', 0, 33, 0.5,
+          apply='camera', help='0 = automatic. A fixed short exposure (e.g. 4–8 ms) cuts motion '
+                               'blur while the turret moves; the camera raises gain instead, '
+                               'so the image gets darker/noisier in dim light.'),
     Param('camera.hflip', 'Mirror horizontally', 'bool', False, apply='camera'),
     Param('camera.vflip', 'Flip vertically', 'bool', False, apply='camera'),
     Param('camera.crosshair_x', 'Crosshair offset X', 'float', 0.0, '', -1, 1, 0.001,
@@ -191,6 +195,19 @@ SCHEMA: list[Param] = [
           help='Follow mode: the indicator turns green when the aim error stays below this…'),
     Param('aim.follow_frames', 'On-target frames', 'int', 5, '', 1, 60, 1,
           help='…for this many frames in a row.'),
+    Param('aim.follow_max_speed', 'Follow max speed', 'float', 60.0, '°/s', 5, 360, 5,
+          help='Speed cap while following; fast moves blur the frames.'),
+    Param('aim.follow_gain', 'Follow correction', 'float', 6.0, '1/s', 0.5, 30, 0.5,
+          help='How fast a remaining aim error is closed. Lower if the turret hunts '
+               'around the target, higher if it lags.'),
+    Param('aim.follow_still_speed', 'Treat as standing still', 'float', 1.5, '°/s', 0, 20, 0.1,
+          help='Estimated target speeds below this count as 0 (no lead): match noise on a '
+               'still target must not make the turret drift.'),
+    Param('aim.follow_min_margin', 'Follow min. margin', 'float', 0.04, '', 0, 0.9, 0.01,
+          help='Like Min. match margin, for follow mode (small search window).'),
+    Param('aim.frame_time_offset', 'Frame time offset', 'float', 0.0, 'ms', -100, 100, 1,
+          help='Correction for when a frame was really exposed. If a still target appears to '
+               'move whenever the turret moves, this is off (the follow log shows it).'),
     Param('aim.follow_patch', 'Follow template size', 'int', 25, 'px', 11, 101, 2,
           help='Roughly the size of the object on the 640 px tracking image.'),
     Param('aim.follow_min_score', 'Follow min. match', 'float', 0.6, '', 0.3, 0.99, 0.01),
