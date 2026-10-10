@@ -73,6 +73,11 @@ class Aimer:
         self.status = {'busy': busy, 'state': state, 'msg': msg, 'point': point,
                        't': time.time()}
 
+    def _report(self, level: str, state: str, msg: str, point=None) -> None:
+        """Final outcome of a click: status for the video overlay + a log line."""
+        self._set(state, msg, point=point)
+        self.c.emit(level, f'aim: {msg}')
+
     def _start(self, coro) -> None:
         self.cancel()
         self.task = asyncio.create_task(coro)
@@ -141,7 +146,10 @@ class Aimer:
                     patch, why = self._patch(got, u, v)
         self.c.move_open_loop(u, v, cx, cy)
         if patch is None:
-            self._set('open', f'open loop only: {why}' if why else 'open loop', point=None)
+            if why:
+                self._report('warn', 'open', f'tracking not used ({why}) — open-loop move only')
+            else:
+                self._set('open', 'open loop')
             return 'open'
         self._set('tracking', 'refining…', busy='aim', point=[u, v])
         self._start(self._refine(patch, u, v))
@@ -153,6 +161,7 @@ class Aimer:
         tol = self.cfg['aim.tolerance']
         hfov, vfov = self.cfg['camera.hfov'], self.cfg['camera.vfov']
         radius = self.cfg['aim.search'] / 100
+        first_err = None
         try:
             for it in range(int(self.cfg['aim.max_iter']) + 1):
                 gray = await self._settled_frame(await self._wait_still())
@@ -163,7 +172,10 @@ class Aimer:
                                      tracker.lens_scale(pv, cy, vfov))
                 m = self._find(gray, p, ex, ey, radius * w)
                 if m is None or not m.ok:
-                    self._set('lost', f'kept open-loop aim: {m.reason if m else "feature out of view"}')
+                    why = m.reason if m else 'spot out of view'
+                    self._report('warn', 'lost', f'tracking failed after the move ({why}) — '
+                                 'kept the open-loop aim' if it == 0 else
+                                 f'tracking lost after {it} correction(s) ({why}) — stopped there')
                     return
                 u, v = self._norm(gray, m.x, m.y)
                 # Re-cut the template here: later corrections are small and
@@ -174,18 +186,21 @@ class Aimer:
                 radius = max(0.05, 0.5 * radius)
                 d_pan, d_tilt = self.c.view_delta(u, v, cx, cy)
                 err = max(abs(d_pan), abs(d_tilt))
+                if first_err is None:
+                    first_err = err
                 if err <= tol:
-                    self._set('locked', f'on target: {err:.2f}° after {it} correction'
-                              + ('' if it == 1 else 's'), point=[u, v])
+                    self._report('info', 'locked', f'tracking locked: {err:.2f}° off after {it} '
+                                 f'correction{"" if it == 1 else "s"} (open-loop move was off by '
+                                 f'{first_err:.2f}°)', point=[u, v])
                     return
                 if it == int(self.cfg['aim.max_iter']):
                     break
                 self._set('tracking', f'correcting {err:.2f}°', busy='aim', point=[u, v])
                 self.c.move_by_deg(d_pan, d_tilt)
-            self._set('locked', f'stopped after {it} corrections, {err:.2f}° left '
-                      '(raise aim.tolerance, or check for skipped steps)', point=[u, v])
+            self._report('warn', 'locked', f'tracking gave up after {it} corrections, {err:.2f}° '
+                         'left (raise aim.tolerance, or check for skipped steps)', point=[u, v])
         except AimAbort as e:
-            self._set('lost', f'refine stopped: {e}')
+            self._report('warn', 'lost', f'tracking stopped: {e}')
         except asyncio.CancelledError:
             raise
 

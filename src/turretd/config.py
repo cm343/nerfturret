@@ -164,7 +164,9 @@ SCHEMA: list[Param] = [
           help='How far from the crosshair to look after an open-loop move.'),
     Param('aim.min_texture', 'Min. texture', 'float', 3.0, '', 0, 50, 0.1,
           help='Below this the spot is too plain to track (wall, sky): open loop only.'),
-    Param('aim.min_score', 'Min. match score', 'float', 0.8, '', 0.3, 0.99, 0.01),
+    Param('aim.min_score', 'Min. match score', 'float', 0.7, '', 0.3, 0.99, 0.01,
+          help='Correlation of the best match (1 = identical). Lighting and perspective '
+               'lower it; the margin check still rejects look-alikes.'),
     Param('aim.min_margin', 'Min. match margin', 'float', 0.1, '', 0, 0.9, 0.01,
           help='Best minus second-best match. Low = repeating pattern, ambiguous.'),
     Param('aim.min_sharp', 'Min. sharpness', 'float', 0.5, '×', 0, 1, 0.05,

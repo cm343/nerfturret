@@ -61,6 +61,7 @@ def test_auto_aim_corrects_a_wrong_fov(cfg):
             assert res == {'mode': 'auto'}
             st = await wait_aim(r)
             assert st['state'] == 'locked', st
+            assert any('tracking locked' in e['msg'] for e in r.events)
             pan, tilt = r.ctrl.position_deg('pan'), r.ctrl.position_deg('tilt')
             assert pan == pytest.approx(true_angle(0.55, TRUE_HFOV), abs=0.15)
             assert tilt == pytest.approx(-true_angle(0.4, TRUE_VFOV), abs=0.15)
@@ -86,6 +87,7 @@ def test_untrackable_spot_falls_back_to_open_loop(cfg):
             await r.settled()
             assert await r.cmd('aim_offset', x=0.3, y=0) == {'mode': 'open'}
             assert 'texture' in r.ctrl.aim.status['msg']
+            assert any(e['level'] == 'warn' and 'tracking not used' in e['msg'] for e in r.events)
     run(body())
 
 

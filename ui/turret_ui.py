@@ -149,9 +149,17 @@ async def ws_relay(request: web.Request) -> web.WebSocketResponse:
 
 
 # ── app ──────────────────────────────────────────────────────────────────────
+async def _no_cache_static(request: web.Request, response: web.StreamResponse) -> None:
+    # Revalidate app.js/style.css on every load (cheap 304 if unchanged), so a
+    # new index.html never runs against a stale cached script.
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-cache'
+
+
 def create_app(pi: str) -> web.Application:
     app = web.Application()
     app[PI] = pi
+    app.on_response_prepare.append(_no_cache_static)
 
     async def on_startup(app):
         app[SESSION] = aiohttp.ClientSession()
