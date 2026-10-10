@@ -170,7 +170,8 @@ SCHEMA: list[Param] = [
     Param('aim.search', 'Search radius', 'float', 25.0, '% width', 5, 60, 1,
           help='How far from the crosshair to look after an open-loop move.'),
     Param('aim.min_texture', 'Min. texture', 'float', 3.0, '', 0, 50, 0.1,
-          help='Below this the spot is too plain to track (wall, sky): open loop only.'),
+          help='Below this the clicked spot is too plain to match directly (wall, sky); '
+               'the scene features still are.'),
     Param('aim.min_score', 'Min. match score', 'float', 0.7, '', 0.3, 0.99, 0.01,
           help='Correlation of the best match (1 = identical). Lighting and perspective '
                'lower it; the margin check still rejects look-alikes.'),
@@ -178,8 +179,11 @@ SCHEMA: list[Param] = [
           help='Best minus second-best match. Low = repeating pattern, ambiguous.'),
     Param('aim.min_sharp', 'Min. sharpness', 'float', 0.5, '×', 0, 1, 0.05,
           help='Sharpness of the match relative to the reference. Low = blurred.'),
+    Param('aim.min_points', 'Min. scene features', 'int', 20, '', 5, 200, 1,
+          help='Consistent features needed to trust a scene-motion measurement.'),
     Param('aim.cal_step', 'FOV calibration step', 'float', 2.0, '°', 0.5, 10, 0.5),
-    Param('aim.cal_max_rms', 'FOV fit tolerance', 'float', 0.15, '° rms', 0.01, 2, 0.01,
+    Param('aim.cal_steps', 'FOV calibration steps', 'int', 5, 'per side', 2, 20, 1),
+    Param('aim.cal_max_rms', 'FOV fit tolerance', 'float', 0.05, '° rms', 0.005, 2, 0.005,
           help='Reject the calibration when the samples fit the lens model worse.'),
 
     # ── safety ───────────────────────────────────────────────────────────────

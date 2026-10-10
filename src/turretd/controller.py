@@ -591,13 +591,11 @@ class Controller:
         return {'mode': await self.aim.click(x, y)}
 
     async def _cmd_fov_calibrate(self, cmd) -> None:
-        """Automatic FOV calibration by tracking the feature at image point x, y."""
+        """Automatic FOV calibration: step the axis, track the whole scene."""
         axis = self._axis(cmd, AIM_AXES)
         self._require_no_estop()
         try:
-            self.aim.calibrate(axis, float(cmd['x']), float(cmd['y']))
-        except (KeyError, TypeError, ValueError):
-            raise CommandError('x and y must be numbers') from None
+            self.aim.calibrate(axis)
         except AimAbort as e:
             raise CommandError(str(e)) from None
 

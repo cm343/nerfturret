@@ -7,14 +7,14 @@ latency never enter a measurement.
 
 Click to aim (aim.mode):
   open  turn by the angle computed from the field of view, done.
-  auto  the same move first; if the clicked spot is trackable (enough texture,
-        turret was standing still when you clicked), find it again after the
-        turret settles and correct the residual, up to aim.max_iter times.
-        Anything not good enough → stay with the open-loop result and say why.
+  auto  the same move first; then measure how far the camera really turned
+        from many scene features (tracker.scene_motion), plus the clicked spot
+        itself when it has texture, and correct the residual, up to
+        aim.max_iter times. Not measurable → keep the open-loop result, say why.
 
-FOV calibration: lock on a feature, step the axis in aim.cal_step increments
-to both sides until the feature nears the frame edge, then fit the pinhole
-field of view to all (angle, position) pairs.
+FOV calibration: step the axis aim.cal_steps × aim.cal_step each way; every
+scene feature tracked across a step gives (before, after, angle); fit the
+pinhole field of view to all of them. No feature needs to be picked.
 """
 
 import asyncio
@@ -27,7 +27,6 @@ try:
 except ImportError:                        # without it, click-to-aim stays open-loop
     tracker = None
 
-EDGE = 0.85                    # stop a calibration sweep when |u| exceeds this
 DEBUG_DIR = os.environ.get('TURRETD_TRACK_DEBUG', '/tmp/turret-track')
 DEBUG_KEEP = 30
 POLL_S = 0.01
@@ -79,7 +78,7 @@ class Aimer:
     def _report(self, level: str, state: str, msg: str, point=None) -> None:
         """Final outcome of a click: status for the video overlay + a log line."""
         self._set(state, msg, point=point)
-        self.c.emit(level, f'aim: {msg}')
+        self.c.emit(level, msg if msg.startswith('FOV') or state == 'done' else f'aim: {msg}')
 
     def _start(self, coro) -> None:
         self.cancel()
@@ -97,33 +96,6 @@ class Aimer:
             await asyncio.sleep(POLL_S)
             self.tick()
         return self.still_since
-
-    async def _settled_frame(self, since: float):
-        """First tracking frame exposed ≥ aim.settle after `since`."""
-        t_min = since + self.cfg['aim.settle'] / 1000
-        got = await asyncio.get_running_loop().run_in_executor(
-            None, self.c.camera.gray_after, t_min, 2.0)
-        if got is None:
-            raise AimAbort('no camera frames')
-        return got[1]
-
-    async def _locate(self, patch, ex, ey, radius, since: float):
-        """Find `patch` in the first frame exposed ≥ aim.settle after `since`.
-        While the only problem is blur (turret still shaking), keep taking newer
-        frames up to aim.settle_max. Returns (gray, match, settle_s)."""
-        loop = asyncio.get_running_loop()
-        t_min = since + self.cfg['aim.settle'] / 1000
-        deadline = since + max(self.cfg['aim.settle_max'], self.cfg['aim.settle']) / 1000
-        while True:
-            got = await loop.run_in_executor(None, self.c.camera.gray_after, t_min, 2.0)
-            if got is None:
-                raise AimAbort('no camera frames')
-            ts, gray = got
-            m = self._find(gray, patch, ex, ey, radius)
-            blurred = m is not None and not m.ok and m.reason.startswith('image blurred')
-            if not blurred or ts >= deadline:
-                return gray, m, ts - since
-            t_min = ts + 1e-3
 
     def _dump(self, kind: str, gray, patch, ex, ey, radius, m) -> Optional[str]:
         """Save what the tracker saw on a failure: template | best match, and the
@@ -172,6 +144,7 @@ class Aimer:
         if p is None:
             return None, 'too close to the frame edge'
         p.frame_shape = gray.shape
+        p.u, p.v = u, v
         if p.texture < self.cfg['aim.min_texture']:
             return None, f'too little texture there ({p.texture:.1f} < {self.cfg["aim.min_texture"]:.1f})'
         return p, ''
@@ -180,6 +153,45 @@ class Aimer:
         h, w = gray.shape
         return tracker.to_norm(x, w), tracker.to_norm(y, h)
 
+    async def _sharp_frame(self, ref, since: float):
+        """First frame exposed ≥ aim.settle after `since`; while it is clearly
+        blurrier than `ref` (turret still shaking), take newer ones up to
+        aim.settle_max. Returns (gray, seconds after stopping)."""
+        loop = asyncio.get_running_loop()
+        t_min = since + self.cfg['aim.settle'] / 1000
+        deadline = since + max(self.cfg['aim.settle_max'], self.cfg['aim.settle']) / 1000
+        ref_sharp = tracker.sharpness(ref) if ref is not None else 0.0
+        while True:
+            got = await loop.run_in_executor(None, self.c.camera.gray_after, t_min, 2.0)
+            if got is None:
+                raise AimAbort('no camera frames')
+            ts, gray = got
+            if (ref_sharp <= 0 or ts >= deadline
+                    or tracker.sharpness(gray) >= self.cfg['aim.min_sharp'] * ref_sharp):
+                return gray, ts - since
+            t_min = ts + 1e-3
+
+    def _scene(self, ref, cur, expect: tuple[float, float]):
+        """Scene motion, rejected unless it roughly agrees with the commanded turn."""
+        sm = tracker.scene_motion(ref, cur, self.cfg['camera.hfov'], self.cfg['camera.vfov'],
+                                  min_points=int(self.cfg['aim.min_points']), expect=expect)
+        if sm.ok and not (tracker.plausible(sm.d_pan, expect[0])
+                          and tracker.plausible(sm.d_tilt, expect[1])):
+            sm.ok = False
+            sm.reason = (f'scene says the turret turned {sm.d_pan:+.1f}°/{sm.d_tilt:+.1f}°, '
+                         f'commanded {expect[0]:+.1f}°/{expect[1]:+.1f}° — field of view far off, '
+                         'or skipped steps')
+        return sm
+
+    def _rest_frame(self):
+        """The latest frame if it shows the turret at rest, else (None, why)."""
+        if self._moving() or self.still_since is None:
+            return None, 'turret was moving when you clicked'
+        gray = self.c.camera.gray
+        if gray is None or self.c.camera.gray_ts < self.still_since + self.cfg['aim.settle'] / 1000:
+            return None, 'turret had not settled when you clicked'
+        return gray, ''
+
     # ── click to aim ─────────────────────────────────────────────────────────
     async def click(self, x: float, y: float) -> str:
         """x, y relative to the crosshair (UI convention). Moves open-loop right
@@ -187,186 +199,159 @@ class Aimer:
         self.cancel()
         cx, cy = self.cfg['camera.crosshair_x'], self.cfg['camera.crosshair_y']
         u, v = x + cx, y + cy
-        patch, why = None, ''
+        ref, why = None, ''
         if self.cfg['aim.mode'] == 'auto':
             if not self.available:
                 why = 'no camera' if tracker is not None else 'OpenCV not installed on the Pi'
-            elif self._moving() or self.still_since is None:
-                why = 'turret was moving when you clicked'
             else:
-                got = self.c.camera.gray
-                # The frame you clicked on must show the turret at rest.
-                if got is None or self.c.camera.gray_ts < self.still_since + self.cfg['aim.settle'] / 1000:
-                    why = 'turret had not settled when you clicked'
-                else:
-                    patch, why = self._patch(got, u, v)
+                ref, why = self._rest_frame()
         self.c.move_open_loop(u, v, cx, cy)
-        if patch is None:
+        if ref is None:
             if why:
                 self._report('warn', 'open', f'tracking not used ({why}) — open-loop move only')
             else:
                 self._set('open', 'open loop')
             return 'open'
+        patch, _ = self._patch(ref, u, v)         # optional: the spot itself, if trackable
         self._set('tracking', 'refining…', busy='aim', point=[u, v])
-        self._start(self._refine(patch, u, v))
+        self._start(self._refine(ref, u, v, patch))
         return 'auto'
 
-    async def _refine(self, patch, pu: float, pv: float) -> None:
-        """patch was cut at image point (pu, pv); find it near the crosshair."""
+    async def _refine(self, ref, u: float, v: float, patch) -> None:
+        """Bring the clicked point (u, v of frame `ref`) onto the crosshair.
+
+        The point is followed as two angles off the camera axis. After every
+        move, the turn the camera actually made is measured from many scene
+        features (works on a plain clicked spot), and, if the spot itself is
+        trackable, its template is matched near where the scene says it is (a
+        direct measurement of the target; wins when both are available)."""
         cx, cy = self.cfg['camera.crosshair_x'], self.cfg['camera.crosshair_y']
         tol = self.cfg['aim.tolerance']
         hfov, vfov = self.cfg['camera.hfov'], self.cfg['camera.vfov']
-        radius = self.cfg['aim.search'] / 100
-        first_err = None
+        h, w = ref.shape
+        alpha, beta = tracker.frame_angle(u, hfov), tracker.frame_angle(v, vfov)
+        a_cross, b_cross = tracker.frame_angle(cx, hfov), tracker.frame_angle(cy, vfov)
+        first_err, how = None, ''
+        # the open-loop move click() just sent
+        commanded = (alpha - a_cross, -(beta - b_cross))
         try:
             for it in range(int(self.cfg['aim.max_iter']) + 1):
                 since = await self._wait_still()
-                h, w = patch.frame_shape
-                ex, ey = tracker.to_px(cx, w), tracker.to_px(cy, h)
-                # Perspective: the spot looks smaller near the centre than at the edge.
-                p = tracker.rescaled(patch, tracker.lens_scale(pu, cx, hfov),
-                                     tracker.lens_scale(pv, cy, vfov))
-                gray, m, settle_s = await self._locate(p, ex, ey, radius * w, since)
-                if m is None or not m.ok:
-                    why = m.reason if m else 'spot out of view'
-                    if m is not None and m.reason.startswith('image blurred'):
-                        why += f' {settle_s * 1000:.0f} ms after stopping — turret still shaking? ' \
-                               'raise aim.settle_max'
-                    self._dump('aim', gray, p, ex, ey, radius * w, m)
+                cur, settle_s = await self._sharp_frame(ref, since)
+                sm = self._scene(ref, cur, commanded)
+                notes = []
+                if sm.ok:
+                    d_p, d_t = sm.at(tracker.from_angle(alpha, hfov), tracker.from_angle(beta, vfov))
+                    alpha, beta = alpha - d_p, beta + d_t
+                    how = f'scene, {sm.n} features'
+                pu, pv = tracker.from_angle(alpha, hfov), tracker.from_angle(beta, vfov)
+                if patch is not None:
+                    ex, ey = tracker.to_px(pu, w), tracker.to_px(pv, h)
+                    radius = (0.03 if sm.ok else self.cfg['aim.search'] / 100) * w
+                    pp = tracker.rescaled(patch, tracker.lens_scale(patch.u, pu, hfov),
+                                          tracker.lens_scale(patch.v, pv, vfov))
+                    m = self._find(cur, pp, ex, ey, radius)
+                    if m is not None and m.ok:
+                        mu, mv = self._norm(cur, m.x, m.y)
+                        if sm.ok:
+                            off = max(abs(tracker.frame_angle(mu, hfov) - alpha),
+                                      abs(tracker.frame_angle(mv, vfov) - beta))
+                            if off > 3 * tol:
+                                notes.append(f'spot is {off:.2f}° off the scene estimate — target moved?')
+                        alpha, beta = tracker.frame_angle(mu, hfov), tracker.frame_angle(mv, vfov)
+                        how = 'spot' + (f' + scene, {sm.n} features' if sm.ok else '')
+                        fresh = tracker.make_patch(cur, m.x, m.y, patch.img.shape[0] // 2)
+                        if fresh is not None and fresh.texture >= self.cfg['aim.min_texture']:
+                            fresh.u, fresh.v = mu, mv
+                            patch = fresh
+                    elif not sm.ok:
+                        self._dump('aim', cur, pp, ex, ey, radius, m)
+                        sm.reason += f'; spot: {m.reason if m else "out of view"}'
+                if not sm.ok and not how.startswith('spot'):
+                    why = sm.reason
+                    if settle_s * 1000 >= self.cfg['aim.settle_max'] - 50:
+                        why += f' (frames still blurred {settle_s * 1000:.0f} ms after stopping?)'
                     self._report('warn', 'lost', f'tracking failed after the move ({why}) — '
                                  'kept the open-loop aim' if it == 0 else
                                  f'tracking lost after {it} correction(s) ({why}) — stopped there')
                     return
-                u, v = self._norm(gray, m.x, m.y)
-                # Re-cut the template here: later corrections are small and
-                # compare like with like.
-                fresh = tracker.make_patch(gray, m.x, m.y, patch.img.shape[0] // 2)
-                if fresh is not None:
-                    fresh.frame_shape = gray.shape
-                if fresh is not None and fresh.texture >= self.cfg['aim.min_texture']:
-                    patch, pu, pv = fresh, u, v
-                radius = max(0.05, 0.5 * radius)
-                d_pan, d_tilt = self.c.view_delta(u, v, cx, cy)
+                point = [tracker.from_angle(alpha, hfov), tracker.from_angle(beta, vfov)]
+                d_pan, d_tilt = alpha - a_cross, -(beta - b_cross)
                 err = max(abs(d_pan), abs(d_tilt))
                 if first_err is None:
                     first_err = err
+                for n in notes:
+                    self.c.emit('warn', f'aim: {n}')
                 if err <= tol:
-                    self._report('info', 'locked', f'tracking locked: {err:.2f}° off after {it} '
-                                 f'correction{"" if it == 1 else "s"} (open-loop move was off by '
-                                 f'{first_err:.2f}°)', point=[u, v])
+                    self._report('info', 'locked', f'tracking locked ({how}): {err:.2f}° off after '
+                                 f'{it} correction{"" if it == 1 else "s"} (open-loop move was off '
+                                 f'by {first_err:.2f}°)', point=point)
                     return
                 if it == int(self.cfg['aim.max_iter']):
                     break
-                self._set('tracking', f'correcting {err:.2f}°', busy='aim', point=[u, v])
+                self._set('tracking', f'correcting {err:.2f}° ({how})', busy='aim', point=point)
                 self.c.move_by_deg(d_pan, d_tilt)
+                commanded = (d_pan, d_tilt)
+                ref = cur                          # next measurement: from this frame on
             self._report('warn', 'locked', f'tracking gave up after {it} corrections, {err:.2f}° '
-                         'left (raise aim.tolerance, or check for skipped steps)', point=[u, v])
+                         'left (raise aim.tolerance, or check for skipped steps)', point=point)
         except AimAbort as e:
             self._report('warn', 'lost', f'tracking stopped: {e}')
-        except asyncio.CancelledError:
-            raise
-
-    def _first_step_hint(self, gray, patch, x, y, est, axis) -> str:
-        """After the first calibration step lost the spot: search the whole frame
-        to tell 'moved much more than expected' from 'unrecognisable'."""
-        h, w = gray.shape
-        m = tracker.find(gray, patch, w / 2, h / 2, max(w, h),
-                         min_score=self.cfg['aim.min_score'], min_margin=self.cfg['aim.min_margin'],
-                         min_sharp=0.0)
-        if m is None or not m.ok:
-            return ''
-        moved = abs(m.x - x) if axis == 'pan' else abs(m.y - y)
-        if moved > 2.5 * est + 10:
-            return (f' — but it was found {moved:.0f} px away instead of ~{est:.0f} px: '
-                    f'the axis turns ~{moved / est:.1f}× more than commanded '
-                    '(gear ratio / microsteps), or the field of view setting is far off')
-        return ''
 
     # ── automatic FOV calibration ────────────────────────────────────────────
-    def calibrate(self, axis: str, u: float, v: float) -> None:
+    def calibrate(self, axis: str) -> None:
         if not self.available:
             raise AimAbort('no camera' if tracker is not None else 'OpenCV not installed on the Pi')
-        self._set('calibrating', 'locking on…', busy='fov', point=[u, v])
-        self._start(self._calibrate(axis, u, v))
+        self._set('calibrating', 'starting…', busy='fov')
+        self._start(self._calibrate(axis))
 
-    async def _calibrate(self, axis: str, u: float, v: float) -> None:
+    async def _calibrate(self, axis: str) -> None:
+        """Step the axis aim.cal_steps times each way by aim.cal_step; between
+        consecutive frames, every scene feature gives a (before, after, angle)
+        triple; fit the field of view to all of them."""
         fov_key = 'camera.hfov' if axis == 'pan' else 'camera.vfov'
-        step = self.cfg['aim.cal_step']
+        step, n_steps = self.cfg['aim.cal_step'], int(self.cfg['aim.cal_steps'])
         start = self.c.position_deg(axis)
+        thetas, a0, a1, stops, n_ok = [], [], [], [], 0
         try:
-            gray = await self._settled_frame(await self._wait_still())
-            patch, why = self._patch(gray, u, v)
-            if patch is None:
-                raise AimAbort(f'pick another spot: {why}')
-            h, w = gray.shape
-            size = w if axis == 'pan' else h
-            est = step / self.cfg[fov_key] * size      # expected px per step
-            thetas, coords = [0.0], [u if axis == 'pan' else v]
-            stops = []                                  # why each sweep ended
+            await self._wait_still()
             for direction in (1, -1):
                 side = '+' if direction > 0 else '−'
                 if direction == -1:
                     self.c.goto_deg(axis, start)
-                    await self._wait_still()
-                x, y, delta = patch.x, patch.y, None
-                last_theta = 0.0
-                for _ in range(200):
+                ref, _ = await self._sharp_frame(None, await self._wait_still())
+                prev = self.c.position_deg(axis)
+                for k in range(n_steps):
                     self.c.move_by_deg(**{f'd_{axis}': direction * step})
-                    since = await self._wait_still()
-                    theta = self.c.position_deg(axis) - start
-                    if abs(theta - last_theta) < step / 4:
-                        stops.append(f'{side}: soft limit')
+                    cur, _ = await self._sharp_frame(ref, await self._wait_still())
+                    pos = self.c.position_deg(axis)
+                    if abs(pos - prev) < step / 4:
+                        stops.append(f'{side}: soft limit after {k} steps')
                         break
-                    if delta is None:                   # unknown direction on the image
-                        radius = 2.5 * est + 10
-                        ex, ey = x, y
-                    else:
-                        radius = 0.5 * abs(delta) + 6
-                        ex, ey = (x + delta, y) if axis == 'pan' else (x, y + delta)
-                    # Rescale for perspective at the last known position (one
-                    # template for the whole sweep: no drift from re-cutting).
-                    pu, pv = tracker.to_norm(ex, w), tracker.to_norm(ey, h)
-                    p = tracker.rescaled(patch, tracker.lens_scale(u, pu, self.cfg['camera.hfov']),
-                                         tracker.lens_scale(v, pv, self.cfg['camera.vfov']))
-                    gray, m, settle_s = await self._locate(p, ex, ey, radius, since)
-                    if m is None or not m.ok:
-                        why = m.reason if m else 'search window left the frame'
-                        if delta is None:
-                            why += self._first_step_hint(gray, p, x, y, est, axis)
-                        elif m is not None and m.reason.startswith('image blurred'):
-                            why += f' {settle_s * 1000:.0f} ms after stopping'
-                        self._dump(f'fov{side}', gray, p, ex, ey, radius, m)
-                        stops.append(f'{side} after {len(thetas) - 1} steps: {why}')
+                    expect = (pos - prev, 0.0) if axis == 'pan' else (0.0, pos - prev)
+                    sm = self._scene(ref, cur, expect)
+                    if sm.p0 is None or len(sm.p0) < self.cfg['aim.min_points']:
+                        stops.append(f'{side} step {k + 1}: {sm.reason}')
                         break
-                    delta = (m.x - x) if axis == 'pan' else (m.y - y)
-                    x, y, last_theta = m.x, m.y, theta
-                    mu, mv = self._norm(gray, m.x, m.y)
-                    thetas.append(theta)
-                    coords.append(mu if axis == 'pan' else mv)
-                    self._set('calibrating', f'{len(thetas)} samples', busy='fov', point=[mu, mv])
-                    if abs(coords[-1]) > EDGE:
-                        stops.append(f'{side}: frame edge')
-                        break
-                    if abs(theta) > 0.9 * self.cfg[fov_key]:
-                        stops.append(f'{side}: max angle')
-                        break
+                    h, w = cur.shape
+                    i, size = (0, w) if axis == 'pan' else (1, h)
+                    thetas += [pos - prev] * len(sm.p0)
+                    a0 += list(tracker.to_norm(sm.p0[:, i], size))
+                    a1 += list(tracker.to_norm(sm.p1[:, i], size))
+                    n_ok += 1
+                    self._set('calibrating', f'{n_ok} steps, {len(thetas)} feature pairs', busy='fov')
+                    ref, prev = cur, pos
             self.c.goto_deg(axis, start)
-            if len(thetas) < 5:
-                raise AimAbort(f'only {len(thetas)} samples. ' + '; '.join(stops))
-            span = max(coords) - min(coords)
-            if span < 0.5:
-                raise AimAbort(f'feature crossed only {span / 2:.0%} of the frame')
-            fov, _sign, rms = tracker.fit_fov(thetas, coords)
+            if n_ok < 3:
+                raise AimAbort(f'only {n_ok} usable steps. ' + '; '.join(stops))
+            # Pan points move along x for a pan step (tilt: y); the fit ignores sign.
+            fov, _sign, rms, n = tracker.fit_fov_pairs(thetas, a0, a1)
             if rms > self.cfg['aim.cal_max_rms']:
-                raise AimAbort(f'fit too poor ({rms:.2f}° rms) — check gear ratio, microsteps '
-                               'and for skipped steps')
+                raise AimAbort(f'fit too poor ({rms:.3f}° rms over {n} pairs) — wobble, skipped '
+                               'steps, or a moving scene')
             self.c.set_config({fov_key: round(fov, 2)})
-            self._set('done', f'{"horizontal" if axis == "pan" else "vertical"} field of view = '
-                      f'{fov:.2f}° ({len(thetas)} samples, {rms:.3f}° rms, saved)')
-            if rms > 0.05:
-                self.status['msg'] += ' — rms is high-ish: wobble or skipped steps?'
-            self.c.emit('info', self.status['msg'])
+            self._report('info', 'done', f'{"horizontal" if axis == "pan" else "vertical"} field '
+                         f'of view = {fov:.2f}° ({n_ok} steps, {n} feature pairs, {rms:.3f}° rms, saved)')
         except AimAbort as e:
             self.c.goto_deg(axis, start)
-            self._set('failed', f'FOV calibration: {e}')
-            self.c.emit('warn', self.status['msg'])
+            self._report('warn', 'failed', f'FOV calibration: {e}')

@@ -123,13 +123,6 @@ $('#video').addEventListener('click', (ev) => {
     return;
   }
   if (S.clickMode === 'fov') { fovPick(p); return; }
-  if (S.clickMode === 'fovauto') {
-    setClickMode(null);
-    send('fov_calibrate', { axis: S.fovAutoAxis, x: round3(p.x), y: round3(p.y) })
-      .then(() => { $('#fov-info').textContent = 'Calibrating… keep the scene still.'; })
-      .catch((e) => { $('#fov-info').textContent = e.message; });
-    return;
-  }
   const cx = S.values['camera.crosshair_x'] || 0, cy = S.values['camera.crosshair_y'] || 0;
   send('aim_offset', { x: round3(p.x - cx), y: round3(p.y - cy) }).catch(() => {});
 });
@@ -508,9 +501,9 @@ function renderAim(a) {
 }
 
 $('#fov-auto').addEventListener('click', () => {
-  S.fovAutoAxis = $('#fov-axis').value;
-  setClickMode('fovauto', 'Click a textured spot near the centre');
-  $('#fov-info').textContent = 'Click a spot with texture: a corner, text, a pattern that does not repeat.';
+  send('fov_calibrate', { axis: $('#fov-axis').value })
+    .then(() => { $('#fov-info').textContent = 'Calibrating… keep the scene still.'; })
+    .catch((e) => { $('#fov-info').textContent = e.message; });
 });
 
 // ── field of view wizard ────────────────────────────────────────────────────

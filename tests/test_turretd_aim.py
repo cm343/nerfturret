@@ -61,7 +61,7 @@ def test_auto_aim_corrects_a_wrong_fov(cfg):
             assert res == {'mode': 'auto'}
             st = await wait_aim(r)
             assert st['state'] == 'locked', st
-            assert any('tracking locked' in e['msg'] for e in r.events)
+            assert any('tracking locked (spot + scene' in e['msg'] for e in r.events)
             pan, tilt = r.ctrl.position_deg('pan'), r.ctrl.position_deg('tilt')
             assert pan == pytest.approx(true_angle(0.55, TRUE_HFOV), abs=0.15)
             assert tilt == pytest.approx(-true_angle(0.4, TRUE_VFOV), abs=0.15)
@@ -80,14 +80,29 @@ def test_open_mode_keeps_the_fov_error(cfg):
     run(body())
 
 
-def test_untrackable_spot_falls_back_to_open_loop(cfg):
-    cfg.set_many({'aim.min_texture': 50})
+def test_plain_spot_is_still_refined_from_scene_features(cfg):
+    cfg.set_many({'aim.min_texture': 50})                     # the spot itself never matches
     async def body():
         async with CamRig(cfg) as r:
             await r.settled()
-            assert await r.cmd('aim_offset', x=0.3, y=0) == {'mode': 'open'}
-            assert 'texture' in r.ctrl.aim.status['msg']
-            assert any(e['level'] == 'warn' and 'tracking not used' in e['msg'] for e in r.events)
+            assert await r.cmd('aim_offset', x=0.55, y=0.4) == {'mode': 'auto'}
+            st = await wait_aim(r)
+            assert st['state'] == 'locked' and '(scene, ' in st['msg'], st
+            assert r.ctrl.position_deg('pan') == pytest.approx(true_angle(0.55, TRUE_HFOV), abs=0.15)
+            assert r.ctrl.position_deg('tilt') == pytest.approx(-true_angle(0.4, TRUE_VFOV), abs=0.15)
+    run(body())
+
+
+def test_unmeasurable_move_keeps_open_loop_and_says_why(cfg):
+    cfg.set_many({'aim.min_texture': 50, 'aim.min_points': 200})   # nothing is good enough
+    async def body():
+        async with CamRig(cfg) as r:
+            await r.settled()
+            await r.cmd('aim_offset', x=0.3, y=0)
+            st = await wait_aim(r)
+            assert st['state'] == 'lost'
+            assert any(e['level'] == 'warn' and 'tracking failed after the move' in e['msg']
+                       for e in r.events)
     run(body())
 
 
@@ -111,33 +126,32 @@ def test_manual_move_cancels_refinement(cfg):
     run(body())
 
 
-@pytest.mark.parametrize('axis, true_fov, x, y', [('pan', TRUE_HFOV, 0.1, 0.2),
-                                                  ('tilt', TRUE_VFOV, 0.2, 0.1)])
-def test_fov_calibration_recovers_the_true_fov(cfg, axis, true_fov, x, y):
+@pytest.mark.parametrize('axis, true_fov', [('pan', TRUE_HFOV), ('tilt', TRUE_VFOV)])
+def test_fov_calibration_recovers_the_true_fov(cfg, axis, true_fov):
+    cfg.set_many({'camera.hfov': 90.0, 'camera.vfov': 10.0})      # badly off, like the real rig
     async def body():
         async with CamRig(cfg) as r:
             await r.settled()
-            await r.cmd('fov_calibrate', axis=axis, x=x, y=y)
+            await r.cmd('fov_calibrate', axis=axis)
             st = await wait_aim(r, timeout=30)
             assert st['state'] == 'done', st
             key = 'camera.hfov' if axis == 'pan' else 'camera.vfov'
-            assert r.ctrl.cfg[key] == pytest.approx(true_fov, abs=0.3)
+            assert r.ctrl.cfg[key] == pytest.approx(true_fov, abs=0.1)
             await r.until(lambda: not r.motion.axis(r.ctrl.axis_index(axis)).moving)
             assert r.ctrl.position_deg(axis) == pytest.approx(0, abs=0.05)   # returned
     run(body())
 
 
-def test_failed_calibration_says_why_each_sweep_stopped(cfg, tmp_path, monkeypatch):
-    import turretd.aim as aim
-    monkeypatch.setattr(aim, 'DEBUG_DIR', str(tmp_path / 'dbg'))
-    cfg.set_many({'aim.min_score': 0.99})                     # nothing ever matches
+def test_failed_calibration_says_why_each_sweep_stopped(cfg):
+    cfg.set_many({'aim.min_points': 200})                     # no step ever has enough
     async def body():
         async with CamRig(cfg) as r:
             await r.settled()
-            await r.cmd('fov_calibrate', axis='pan', x=0.1, y=0.2)
+            await r.cmd('fov_calibrate', axis='pan')
             st = await wait_aim(r, timeout=30)
             assert st['state'] == 'failed'
-            assert '+ after 0 steps: match too weak' in st['msg']
-            assert '− after 0 steps: match too weak' in st['msg']
-            assert len(list((tmp_path / 'dbg').iterdir())) == 2      # one image per side
+            assert 'only 0 usable steps' in st['msg']
+            assert '+ step 1:' in st['msg'] and '− step 1:' in st['msg']
+            await r.until(lambda: not r.motion.axis(0).moving)
+            assert r.ctrl.position_deg('pan') == pytest.approx(0, abs=0.05)
     run(body())

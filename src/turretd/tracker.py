@@ -25,6 +25,17 @@ import cv2
 import numpy as np
 
 
+def frame_angle(frac: float, fov_deg: float) -> float:
+    """Angle (°) off the optical axis of a point at `frac` of the half-frame
+    (pinhole camera): tan(angle) = frac · tan(fov/2)."""
+    return math.degrees(math.atan(frac * math.tan(math.radians(fov_deg) / 2)))
+
+
+def from_angle(angle_deg: float, fov_deg: float) -> float:
+    """Inverse of frame_angle: normalized frame coordinate of an angle."""
+    return math.tan(math.radians(angle_deg)) / math.tan(math.radians(fov_deg) / 2)
+
+
 def to_px(u: float, size: int) -> float:
     return (u + 1) / 2 * size - 0.5
 
@@ -56,6 +67,8 @@ class Patch:
     texture: float
     sharp: float
     frame_shape: tuple = (0, 0)        # (h, w) of the frame it was cut from
+    u: float = 0.0                     # where it was cut, normalized
+    v: float = 0.0
 
 
 def make_patch(gray: np.ndarray, x: float, y: float, half: int) -> Optional[Patch]:
@@ -75,7 +88,8 @@ def rescaled(patch: Patch, sx: float, sy: float) -> Patch:
     h, w = patch.img.shape
     nw, nh = max(5, int(round(w * sx)) | 1), max(5, int(round(h * sy)) | 1)
     img = cv2.resize(patch.img, (nw, nh), interpolation=cv2.INTER_AREA if sx < 1 else cv2.INTER_LINEAR)
-    return Patch(img, patch.x, patch.y, texture(img), sharpness(img), patch.frame_shape)
+    return Patch(img, patch.x, patch.y, texture(img), sharpness(img), patch.frame_shape,
+                 patch.u, patch.v)
 
 
 def lens_scale(frac_from: float, frac_to: float, fov_deg: float) -> float:
@@ -161,3 +175,164 @@ def fit_fov(thetas, us, lo: float = 10.0, hi: float = 170.0,
         if rms[i] < best[0]:
             best = (float(rms[i]), float(fovs[i]), s)
     return best[1], best[2], best[0]
+
+
+# ── scene motion: how far the camera turned, from many features ──────────────
+@dataclass
+class SceneMotion:
+    d_pan: float = 0.0           # ° the camera turned (same sign as Controller.view_delta)
+    d_tilt: float = 0.0
+    n: int = 0                   # inlier features
+    found: int = 0               # features tracked reliably (before outlier rejection)
+    detected: int = 0            # corners detected in the reference frame
+    rms: float = 0.0             # ° spread of the inliers
+    p0: Optional[np.ndarray] = None   # reliable pairs (px), N×2, for FOV fitting
+    p1: Optional[np.ndarray] = None
+    ok: bool = False
+    reason: str = ''
+    _fit: tuple = ()                  # per-axis quadratic of the turn vs. position
+
+    def at(self, u: float, v: float) -> tuple[float, float]:
+        """(d_pan, d_tilt) as seen by a point at (u, v) of the reference frame.
+        With an exact field of view every feature reports the same turn; with an
+        inexact one it varies smoothly across the frame (pan with u, tilt with v),
+        so read it off a fit at the point instead of using the mean."""
+        if not self._fit:
+            return self.d_pan, self.d_tilt
+        cp, ct = self._fit
+        return float(np.polyval(cp, u)), float(np.polyval(ct, v))
+
+
+def _angles(px: np.ndarray, size: int, fov: float) -> np.ndarray:
+    k = math.tan(math.radians(fov) / 2)
+    return np.degrees(np.arctan(((px + 0.5) / size * 2 - 1) * k))
+
+
+def scene_motion(ref: np.ndarray, cur: np.ndarray, hfov: float, vfov: float, *,
+                 max_points: int = 200, min_points: int = 20,
+                 expect: Optional[tuple[float, float]] = None) -> SceneMotion:
+    """Camera rotation between two frames of a static scene, from up to
+    max_points corners tracked with pyramidal Lucas–Kanade.
+
+    Pure rotation keeps each point's horizontal angle atan(u·tan(hfov/2))
+    changing by exactly the pan angle (and likewise vertically for tilt), so
+    every feature votes for (d_pan, d_tilt); the median and a MAD cut throw out
+    things that moved on their own (people, the target) and bad tracks.
+
+    expect = the commanded (d_pan, d_tilt): features start where that turn
+    would put them. Tracking is also tried from a whole-frame phase-correlation
+    guess; the attempt with more consistent features wins."""
+    h, w = ref.shape
+    margin = 12
+    mask = np.zeros_like(ref)
+    mask[margin:h - margin, margin:w - margin] = 255
+    pts = cv2.goodFeaturesToTrack(ref, max_points, 0.01, max(8, w // 50), mask=mask, blockSize=7)
+    detected = 0 if pts is None else len(pts)
+    if pts is None or detected < min_points:
+        return SceneMotion(detected=detected,
+                           reason=f'too little texture in the scene ({detected} features)')
+    p0 = pts.reshape(-1, 2)
+    guesses = []
+    if expect is not None:
+        a = _angles(p0[:, 0], w, hfov) - expect[0]
+        b = _angles(p0[:, 1], h, vfov) + expect[1]
+        ok = (np.abs(a) < 89) & (np.abs(b) < 89)
+        gx = (np.tan(np.radians(a)) / math.tan(math.radians(hfov) / 2) + 1) / 2 * w - 0.5
+        gy = (np.tan(np.radians(b)) / math.tan(math.radians(vfov) / 2) + 1) / 2 * h - 0.5
+        if ok.all():
+            guesses.append(np.stack([gx, gy], axis=1))
+    (sx, sy), _ = cv2.phaseCorrelate(ref.astype(np.float32), cur.astype(np.float32))
+    guesses.append(p0 + np.float32([sx, sy]))
+    best = None
+    for g in guesses:
+        r = _track(ref, cur, pts, g.astype(np.float32).reshape(-1, 1, 2), hfov, vfov, min_points)
+        r.detected = detected
+        if best is None or r.n > best.n:
+            best = r
+        if r.ok and r.n >= 0.6 * detected:
+            break                                  # good enough, skip the other guess
+    if best.ok and best.n < max(min_points, detected // 4):
+        best.ok = False
+        best.reason = f'only {best.n} of {detected} features consistent (turned too far, or blur)'
+    return best
+
+
+def _track(ref, cur, pts, init, hfov, vfov, min_points) -> SceneMotion:
+    h, w = ref.shape
+    res = SceneMotion()
+    lk = dict(winSize=(21, 21), maxLevel=3,
+              criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+    nxt, st, _ = cv2.calcOpticalFlowPyrLK(ref, cur, pts, init, flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **lk)
+    back, st2, _ = cv2.calcOpticalFlowPyrLK(cur, ref, nxt, pts.copy(),
+                                            flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **lk)
+    p0, p1 = pts.reshape(-1, 2), nxt.reshape(-1, 2)
+    fb = np.linalg.norm(back.reshape(-1, 2) - p0, axis=1)
+    inside = ((p1[:, 0] >= 0) & (p1[:, 0] < w) & (p1[:, 1] >= 0) & (p1[:, 1] < h))
+    good = (st.ravel() == 1) & (st2.ravel() == 1) & (fb < 0.5) & inside
+    p0, p1 = p0[good], p1[good]
+    res.found, res.p0, res.p1 = len(p0), p0, p1
+    if len(p0) < min_points:
+        res.reason = f'only {len(p0)} of {len(pts)} features tracked (blur, or turned too far)'
+        return res
+    dp = _angles(p0[:, 0], w, hfov) - _angles(p1[:, 0], w, hfov)
+    dt = _angles(p1[:, 1], h, vfov) - _angles(p0[:, 1], h, vfov)
+    keep = np.ones(len(dp), bool)
+    for d in (dp, dt):
+        med = np.median(d)
+        mad = 1.4826 * np.median(np.abs(d - med))
+        keep &= np.abs(d - med) <= max(0.05, 4 * mad)
+    res.n = int(keep.sum())
+    if res.n < min_points:
+        res.reason = f'features disagree ({res.n} of {len(p0)} consistent): moving scene?'
+        return res
+    res.d_pan, res.d_tilt = float(dp[keep].mean()), float(dt[keep].mean())
+    res.rms = float(math.sqrt(((dp[keep] - res.d_pan) ** 2).mean()
+                              + ((dt[keep] - res.d_tilt) ** 2).mean()))
+    if res.n >= 12:
+        u0 = (p0[keep, 0] + 0.5) / w * 2 - 1
+        v0 = (p0[keep, 1] + 0.5) / h * 2 - 1
+        res._fit = (np.polyfit(u0, dp[keep], 2), np.polyfit(v0, dt[keep], 2))
+    res.ok = True
+    return res
+
+
+def plausible(measured: float, commanded: float) -> bool:
+    """Measured turn vs. the commanded one: same direction and within 3× for
+    real moves (the field of view setting may be off, so not tighter)."""
+    if abs(commanded) < 1.0:
+        return abs(measured - commanded) < 1.5
+    r = measured / commanded
+    return 1 / 3 <= r <= 3
+
+
+def fit_fov_pairs(thetas, a0, a1, lo: float = 10.0, hi: float = 170.0) -> tuple[float, float, float, int]:
+    """FOV from feature pairs: each pair (a0 → a1, normalized coordinate along
+    the axis) was seen before/after the turret turned by theta (°). For the right
+    fov, atan(a0·k) − atan(a1·k) = ±theta for every pair. Coarse-to-fine grid
+    search, then one round of outlier rejection. Returns (fov, sign, rms°, n)."""
+    th = np.asarray(thetas, np.float64)
+    a0 = np.asarray(a0, np.float64)
+    a1 = np.asarray(a1, np.float64)
+    keep = np.ones(len(th), bool)
+
+    def search(lo_, hi_, step, sel):
+        fovs = np.arange(lo_, hi_ + step / 2, step)
+        k = np.tan(np.radians(fovs) / 2)[:, None]
+        d = np.degrees(np.arctan(a0[sel][None] * k) - np.arctan(a1[sel][None] * k))
+        best = (math.inf, lo_, 1.0)
+        for s in (1.0, -1.0):
+            rms = np.sqrt(((d - s * th[sel][None]) ** 2).mean(axis=1))
+            i = int(rms.argmin())
+            if rms[i] < best[0]:
+                best = (float(rms[i]), float(fovs[i]), s)
+        return best
+
+    for _ in range(2):
+        _, fov, _ = search(lo, hi, 0.5, keep)
+        rms, fov, s = search(max(lo, fov - 1), min(hi, fov + 1), 0.01, keep)
+        k = math.tan(math.radians(fov) / 2)
+        r = np.degrees(np.arctan(a0 * k) - np.arctan(a1 * k)) - s * th
+        mad = 1.4826 * np.median(np.abs(r[keep] - np.median(r[keep])))
+        keep = np.abs(r - np.median(r[keep])) <= max(0.02, 4 * mad)
+    rms, fov, s = search(max(lo, fov - 1), min(hi, fov + 1), 0.01, keep)
+    return fov, s, rms, int(keep.sum())
