@@ -123,6 +123,11 @@ $('#video').addEventListener('click', (ev) => {
     return;
   }
   if (S.clickMode === 'fov') { fovPick(p); return; }
+  const hit = boxAt(p);
+  if (hit) {                                 // clicked a detected target: follow it
+    send('follow_box', hit).catch(() => {});
+    return;
+  }
   const cx = S.values['camera.crosshair_x'] || 0, cy = S.values['camera.crosshair_y'] || 0;
   send('aim_offset', { x: round3(p.x - cx), y: round3(p.y - cy) }).catch(() => {});
 });
@@ -381,6 +386,7 @@ function onConfigChanged(keys, flash = false) {
   for (const b of document.querySelectorAll('#mode button')) b.setAttribute('aria-checked', b.dataset.mode === v['fire.mode']);
   renderCrosshair();
   for (const b of document.querySelectorAll('#aim-mode button')) b.setAttribute('aria-checked', b.dataset.mode === v['aim.mode']);
+  for (const b of document.querySelectorAll('button.toggle[data-key]')) b.setAttribute('aria-pressed', !!v[b.dataset.key]);
   $('#dist-wrap').hidden = v['aim.mode'] !== 'follow';
   if (document.activeElement !== $('#dist')) $('#dist').value = v['aim.target_distance'];
   $('#dist-val').textContent = `${fmt(v['aim.target_distance'], 1)} m`;
@@ -475,6 +481,43 @@ function renderAxisCards(t) {
     const en = $('.en', card);
     if (en) en.textContent = a.enabled ? 'Disable' : 'Enable';
   }
+}
+
+// ── detection ───────────────────────────────────────────────────────────────
+for (const b of document.querySelectorAll('button.toggle[data-key]')) {
+  b.addEventListener('click', () => setConfig({ [b.dataset.key]: !S.values[b.dataset.key] }));
+}
+
+function boxAt(p) {
+  const r = S.tele && S.tele.detect && S.tele.detect.result;
+  if (!r) return null;
+  let best = null;
+  r.boxes.forEach((b, i) => {
+    const [u1, v1, u2, v2] = b.box;
+    if (b.target && p.x >= u1 && p.x <= u2 && p.y >= v1 && p.y <= v2
+        && (!best || b.conf > r.boxes[best.i].conf)) best = { rid: r.id, i };
+  });
+  return best;
+}
+
+function renderDetect(d) {
+  const root = $('#boxes');
+  const r = d && d.enabled ? d.result : null;
+  root.replaceChildren(...(r ? r.boxes : []).map((b) => {
+    const [u1, v1, u2, v2] = b.box;
+    const e = el('div', { class: `box${b.target ? ' target' : ''}` },
+      el('span', {}, `${b.label} ${Math.round(b.conf * 100)}%`));
+    Object.assign(e.style, { left: `${50 + u1 * 50}%`, top: `${50 + v1 * 50}%`,
+      width: `${(u2 - u1) * 50}%`, height: `${(v2 - v1) * 50}%` });
+    return e;
+  }));
+  let st = '';
+  if (d && d.enabled) {
+    st = d.error ? `⚠ ${d.error}` : !d.url ? 'waiting for the laptop model…'
+      : `${fmt(d.fps, 0)}/s` + (d.infer_ms != null ? ` · ${fmt(d.infer_ms, 0)} ms` : '')
+        + (r ? ` · ${r.boxes.length} found` : '');
+  }
+  $('#det-status').textContent = st;
 }
 
 // ── click-aim mode and tracker status ───────────────────────────────────────
@@ -580,6 +623,7 @@ function renderTelemetry() {
 
   renderAxisCards(t);
   renderAim(t && t.aim);
+  renderDetect(t && t.detect);
   if (!t) { $('#hud-aim').textContent = ''; $('#hud-fire').textContent = ''; return; }
 
   const sys = t.system || {};

@@ -81,6 +81,16 @@ class Aimer:
             self._set('idle', 'follow stopped' if was == 'follow' else 'cancelled')
         self.task = None
 
+    def follow_detection(self, result: dict, d: dict) -> None:
+        """Start following a detected object (clicked box or auto-track)."""
+        if not self.available:
+            raise AimAbort('no camera')
+        self.cancel()
+        u1, v1, u2, v2 = d['box']
+        u, v = (u1 + u2) / 2, (v1 + v2) / 2
+        self._set('following', f'locking on {d["label"]}…', busy='follow', point=[u, v])
+        self._start(self.follower.run(u, v, seed=(result, d)))
+
     def stop_follow(self) -> None:
         """Stop button: end following and bring pan/tilt to a ramped stop."""
         if self.following:

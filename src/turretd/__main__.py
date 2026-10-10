@@ -28,6 +28,9 @@ def main() -> None:
     ap.add_argument('--port', type=int, default=8090)
     ap.add_argument('--config-dir', default=DEFAULT_CONFIG_DIR)
     ap.add_argument('--no-camera', action='store_true')
+    ap.add_argument('--detect-url', default=None,
+                    help='YOLO endpoint, e.g. http://laptop:8100/detect (default: announced '
+                         'by turret_ui.py)')
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     log = logging.getLogger('turretd')
@@ -56,6 +59,8 @@ def main() -> None:
         camera = CameraService('sim' if args.sim else 'picam', view=view)
 
     ctrl = Controller(cfg, motion, fly, camera)
+    if args.detect_url:
+        ctrl.detect.url, ctrl.detect_url_fixed = args.detect_url, True
     ctrl_ref.append(ctrl)
     if camera:
         camera.start(cfg.snapshot())

@@ -27,6 +27,7 @@ from typing import Callable, Optional
 
 from . import system
 from .aim import Aimer, AimAbort
+from .detect import DetectionService
 from .config import PARAMS, ConfigStore
 from .motion import AxisPins, MotionClient
 
@@ -67,7 +68,9 @@ class Controller:
         self.fly = flywheels
         self.camera = camera
         self.clock = clock
+        self.detect_url_fixed = False
         self.aim = Aimer(self)
+        self.detect = DetectionService(self)
 
         self.state = 'DISARMED'
         self.estop_reason: Optional[str] = None
@@ -202,6 +205,7 @@ class Controller:
             self.apply_axis(axis)
         self.fly.setup()
         self._tasks.append(asyncio.create_task(self._tick_loop()))
+        self.detect.start()
 
     async def shutdown(self) -> None:
         # The next start assumes the loader is fully back: put it there first.
@@ -218,6 +222,7 @@ class Controller:
                                           or self.motion.axis(AXIS_INDEX['loader']).moving):
                 await asyncio.sleep(0.01)
         self.estop('turretd shutting down', quiet=True)
+        await self.detect.stop()
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -548,6 +553,7 @@ class Controller:
         if d not in (-1, 0, 1):
             raise CommandError('dir must be -1, 0 or 1')
         self.aim.cancel()
+        self.detect.manual_input()
         if d == 0:
             self.motion.send('stop', AXIS_INDEX[axis])
             return
@@ -560,6 +566,7 @@ class Controller:
         axis = self._axis(cmd, AIM_AXES)
         self._require_no_estop()
         self.aim.cancel()
+        self.detect.manual_input()
         d = 1 if cmd.get('dir', 1) > 0 else -1
         deg = float(cmd.get('deg', self.cfg[f'{axis}.jog_step']))
         speed = self.cfg[f'{axis}.speed'] * self._speed_factor(axis, cmd.get('speed', 'normal'))
@@ -603,10 +610,37 @@ class Controller:
             raise CommandError(str(e)) from None
 
     async def _cmd_aim_cancel(self, cmd) -> None:
+        if self.cfg['detect.auto_track']:            # Stop means stop: no re-engaging
+            self.set_config({'detect.auto_track': False})
+            self.emit('info', 'auto-track off')
         if self.aim.following:
             self.aim.stop_follow()
         else:
             self.aim.cancel()
+
+    async def _cmd_detector_url(self, cmd) -> None:
+        """The UI relay announces its YOLO endpoint (the laptop's address as the
+        Pi sees it). A --detect-url given on the command line wins."""
+        url = cmd.get('url')
+        if isinstance(url, str) and url.startswith('http') and not self.detect_url_fixed:
+            if url != self.detect.url:
+                self.emit('info', f'detector at {url}')
+            self.detect.url = url
+
+    async def _cmd_follow_box(self, cmd) -> None:
+        """Follow a detected object: the clicked box of a detection result."""
+        self._require_no_estop()
+        r = self.detect.get(int(cmd.get('rid', -1)))
+        try:
+            d = r['dets'][int(cmd.get('i', -1))] if r else None
+        except (IndexError, ValueError, TypeError):
+            d = None
+        if d is None:
+            raise CommandError('that detection is gone — click again')
+        try:
+            self.aim.follow_detection(r, d)
+        except AimAbort as e:
+            raise CommandError(str(e)) from None
 
     async def _cmd_set_zero(self, cmd) -> None:
         axis = self._axis(cmd, AIM_AXES)
@@ -736,6 +770,7 @@ class Controller:
                        'backend': self.motion.backend},
             'camera': self.camera.status() if self.camera else None,
             'aim': self.aim.status,
+            'detect': self.detect.telemetry(),
             'system': system.snapshot(),
             'restart_needed': sorted(self.restart_needed),
         }

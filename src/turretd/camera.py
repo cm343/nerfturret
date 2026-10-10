@@ -90,6 +90,7 @@ class CameraService:
         self.gray_exp = 0.0                  # its exposure time (s)
         self.gray_ring = collections.deque(maxlen=GRAY_RING)   # (ts, exp, gray)
         self.sim_t0 = None                   # sim: time origin of the drifting target
+        self.color = None                    # latest small colour frame: (ts, exp, yuv420 or bgr)
         self._cond = threading.Condition()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -113,11 +114,32 @@ class CameraService:
                     self._fps_count, self._fps_t0 = 0, now
             self._cond.notify_all()
 
-    def _publish_gray(self, gray, ts: float, exposure: float = 0.0) -> None:
+    def _publish_gray(self, gray, ts: float, exposure: float = 0.0, color=None) -> None:
         with self._cond:
             self.gray, self.gray_ts, self.gray_exp = gray, ts, exposure
+            if color is not None:
+                self.color = (ts, exposure, color)
             self.gray_ring.append((ts, exposure, gray))
             self._cond.notify_all()
+
+    def color_bgr(self):
+        """Latest small colour frame as BGR: (ts, exposure_s, bgr) or None.
+        Same size, timing and field of view as the tracking frames."""
+        got = self.color
+        if got is None:
+            return None
+        ts, exp, img = got
+        if img.ndim == 2:                    # picam: planar YUV420 (I420)
+            import cv2
+            img = cv2.cvtColor(img, cv2.COLOR_YUV2BGR_I420)
+        return ts, exp, img
+
+    def gray_at(self, ts: float):
+        """The buffered tracking frame closest to ts: (ts, exposure_s, gray) or None."""
+        with self._cond:
+            if not self.gray_ring:
+                return None
+            return min(self.gray_ring, key=lambda f: abs(f[0] - ts))
 
     def gray_since(self, t_min: float) -> list:
         """Buffered tracking frames exposed at or after t_min, oldest first:
@@ -247,15 +269,16 @@ class CameraService:
                 md = request.get_metadata()
                 ts = md.get('SensorTimestamp')
                 exp = md.get('ExposureTime', 0) / 1e6
-                y = request.make_array('lores')[:gh, :gw].copy()
+                yuv = request.make_array('lores')[:gh * 3 // 2, :gw].copy()
+                y = yuv[:gh]                 # Y plane = grayscale (a view, no copy)
             except Exception:  # noqa: BLE001 — never break the camera thread
                 return
             if ts is None:
-                service._publish_gray(y, time.monotonic() - 0.05, exp)
+                service._publish_gray(y, time.monotonic() - 0.05, exp, yuv)
                 return
             if 'offset' not in clock:
                 clock['offset'] = _sensor_clock_offset(ts / 1e9)
-            service._publish_gray(y, ts / 1e9 + clock['offset'], exp)
+            service._publish_gray(y, ts / 1e9 + clock['offset'], exp, yuv)
 
         cam.post_callback = on_request
         self._picam = cam
@@ -303,10 +326,9 @@ class CameraService:
             pan, tilt = self.view()
             frame = scene.render(pan, tilt, ts - t0)
             if cv2 is not None:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                if (gw, gh) != (w, h):
-                    gray = cv2.resize(gray, (gw, gh), interpolation=cv2.INTER_AREA)
-                self._publish_gray(gray, ts)
+                small = frame if (gw, gh) == (w, h) else cv2.resize(
+                    frame, (gw, gh), interpolation=cv2.INTER_AREA)
+                self._publish_gray(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), ts, 0.0, small)
             jpeg = encode_jpeg(frame, quality)
             if jpeg:
                 self._publish(jpeg)

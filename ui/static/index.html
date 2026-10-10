@@ -32,6 +32,7 @@
       <div class="hud hud-tr" id="hud-fire"></div>
       <div class="hud hud-bl" id="hud-cam"></div>
       <div class="cam-msg" id="cam-msg" hidden></div>
+      <div class="boxes" id="boxes"></div>
       <div class="track-mark" id="track-mark" hidden></div>
       <div class="hud hud-br" id="hud-track" hidden></div>
       <div class="click-mode" id="click-mode" hidden></div>
@@ -48,6 +49,18 @@
         <span id="dist-val"></span></label>
       <button class="mini stop" id="follow-stop" hidden>Stop follow</button>
       <span class="lock" id="lock" hidden>ON TARGET</span>
+    </div>
+    <div class="aim-bar">
+      <span class="muted">Detection:</span>
+      <button class="mini toggle" id="det-on" data-key="detect.enabled">Detect</button>
+      <span class="det-classes">
+        <button class="mini toggle" data-key="detect.helicopter">Helicopter</button>
+        <button class="mini toggle" data-key="detect.drone">Drone</button>
+        <button class="mini toggle" data-key="detect.airplane">Airplane</button>
+      </span>
+      <button class="mini toggle" data-key="detect.auto_track"
+        title="Follow the most confident target by itself; firing stays manual">Auto-track</button>
+      <span class="muted" id="det-status"></span>
     </div>
     <div class="video-hint">
       <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move</span>

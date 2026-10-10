@@ -221,6 +221,20 @@ SCHEMA: list[Param] = [
     Param('aim.cal_max_rms', 'FOV fit tolerance', 'float', 0.05, '° rms', 0.005, 2, 0.005,
           help='Reject the calibration when the samples fit the lens model worse.'),
 
+    # ── object detection (YOLO on the laptop) ────────────────────────────────
+    Param('detect.enabled', 'Detection', 'bool', False,
+          help='Send frames to the YOLO model started by turret_ui.py on the laptop.'),
+    Param('detect.helicopter', 'Target: helicopter', 'bool', True),
+    Param('detect.drone', 'Target: drone', 'bool', True),
+    Param('detect.airplane', 'Target: airplane', 'bool', False),
+    Param('detect.conf', 'Min. confidence', 'float', 0.4, '', 0.05, 0.95, 0.05),
+    Param('detect.max_rate', 'Max detection rate', 'float', 15.0, '/s', 1, 30, 1),
+    Param('detect.auto_track', 'Auto-track', 'bool', False,
+          help='Start following the most confident target by itself. Firing stays manual. '
+               'Stop follow switches it off.'),
+    Param('detect.manual_pause', 'Auto-track pause', 'float', 3.0, 's', 0, 30, 0.5,
+          help='No auto-track for this long after a manual move.'),
+
     # ── safety ───────────────────────────────────────────────────────────────
     Param('safety.watchdog_ms', 'Link watchdog', 'int', 500, 'ms', 100, 5000, 50,
           help='No heartbeat from the UI for this long → emergency stop.'),
@@ -229,7 +243,8 @@ SCHEMA: list[Param] = [
 PARAMS: dict[str, Param] = {p.key: p for p in SCHEMA}
 GROUP_LABELS = {
     'flywheel': 'Flywheels', 'pan': 'Pan', 'tilt': 'Tilt', 'loader': 'Loader',
-    'fire': 'Firing', 'camera': 'Camera', 'aim': 'Aim & tracking', 'safety': 'Safety',
+    'fire': 'Firing', 'camera': 'Camera', 'aim': 'Aim & tracking', 'detect': 'Detection',
+    'safety': 'Safety',
 }
 
 

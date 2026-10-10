@@ -26,6 +26,13 @@ Per camera frame (~30 Hz):
 The object is clicked on a video frame that is already ~aim.click_latency
 old in the browser: the template is cut from the buffered frame of that time
 and tracked forward through the newer buffered frames to catch up.
+
+Detections (detect.py, YOLO on the laptop) can start a follow (a clicked
+box, or auto-track) and keep correcting it: every new result is converted to
+room directions with the turret position at *its* frame time and matched to
+the track. A matching box re-anchors the template when the template has lost
+the object or drifted off it (more than half a box away), and keeps the
+follow alive while the template alone could not.
 """
 
 import asyncio
@@ -129,8 +136,11 @@ class Follower:
                               'following': state == 'following'})
 
     # ── main loop ────────────────────────────────────────────────────────────
-    async def run(self, u: float, v: float) -> None:
+    async def run(self, u: float, v: float, seed=None) -> None:
+        """Follow the object at (u, v) of the frame clicked ~aim.click_latency
+        ago, or — seed = (detection result, box) — the detected object."""
         cam, cfg = self.c.camera, self.cfg
+        det = getattr(self.c, 'detect', None)
         hfov, vfov = cfg['camera.hfov'], cfg['camera.vfov']
         cx, cy = cfg['camera.crosshair_x'], cfg['camera.crosshair_y']
         a_cross, b_cross = tracker.frame_angle(cx, hfov), tracker.frame_angle(cy, vfov)
@@ -138,6 +148,8 @@ class Follower:
         try:
             # 1. The frame the user clicked on, and the frames since.
             t_click = time.monotonic() - cfg['aim.click_latency'] / 1000
+            if seed is not None:                       # the detection's own frame
+                t_click = seed[0]['ts']
             frames = cam.gray_since(0.0)
             # the newest frame exposed at or before the click time, and all after it
             before = [i for i, f in enumerate(frames) if f[0] <= t_click]
@@ -149,11 +161,13 @@ class Follower:
                 frames = [got]
             ts, exp, gray = frames[0]
             h, w = gray.shape
-            patch = tracker.make_patch(gray, tracker.to_px(u, w), tracker.to_px(v, h),
-                                       int(cfg['aim.follow_patch']) // 2)
+            half = int(cfg['aim.follow_patch']) // 2
+            if seed is not None:
+                half = _box_half(seed[1]['box'], w, h)
+            patch = tracker.make_patch(gray, tracker.to_px(u, w), tracker.to_px(v, h), half)
             if patch is None:
                 raise _Lost('too close to the frame edge')
-            if patch.texture < cfg['aim.min_texture']:
+            if patch.texture < (0.5 if seed is not None else cfg['aim.min_texture']):
                 raise _Lost(f'too little texture to follow ({patch.texture:.1f})')
             anchor = patch.img                       # never changes: guards against drift
             tmpl = patch.img.astype('float32')
@@ -171,6 +185,9 @@ class Follower:
                      for ax in ('pan', 'tilt')}
             still = cfg['aim.follow_still_speed']
             self.log = []
+            det_rid = seed[0]['id'] if seed is not None else (
+                det.results[-1]['id'] if det is not None and det.results else 0)
+            last_det_match = time.monotonic() if seed is not None else 0.0
             self._status('following', 'locked on', point=[u, v])
             self.c.emit('info', 'aim: following target')
             while True:
@@ -221,9 +238,22 @@ class Follower:
                 else:
                     misses += 1
                     point = None
-                    if (misses / 30) > cfg['aim.follow_lost']:
-                        why = m.reason if m is not None else 'out of view'
-                        raise _Lost(f'target lost ({why})')
+                # Detections: re-anchor / keep alive (see module docstring).
+                if det is not None and cfg['detect.enabled']:
+                    for r in det.since(det_rid):
+                        det_rid = r['id']
+                        got_det = self._use_detection(r, faz, fel, hfov, vfov, misses > 0)
+                        if got_det is not None:
+                            last_det_match = time.monotonic()
+                            new_patch, frame_ts = got_det
+                            if new_patch is not None:
+                                patch, anchor = new_patch, new_patch.img
+                                tmpl = new_patch.img.astype('float32')
+                                misses = 0
+                if misses and (misses / 30) > cfg['aim.follow_lost'] and \
+                        time.monotonic() - last_det_match > cfg['aim.follow_lost']:
+                    why = m.reason if m is not None else 'out of view'
+                    raise _Lost(f'target lost ({why})')
                 # 4. Aim error at this frame: where the turret pointed vs. where it should have.
                 # A target slower than `still` counts as standing: no lead from noise.
                 v_az = faz.v if abs(faz.v) >= still else 0.0
@@ -266,6 +296,48 @@ class Follower:
         finally:
             self._save_log()
 
+    def _use_detection(self, r, faz, fel, hfov, vfov, template_lost):
+        """Match a detection result to the track. Returns None (no match), or
+        (new_patch or None, frame ts): a new template when the current one lost
+        the object or drifted more than half a box off it; the filter is
+        shifted onto the detection in that case."""
+        t = r['ts'] + r['exp'] / 2 + self.cfg['aim.frame_time_offset'] / 1000
+        pose = self.turret_at(t)
+        if pose is None:
+            return None
+        pan_t, tilt_t = pose
+        az_p, el_p = faz.predict(t), fel.predict(t)
+        best = None
+        for d in r['dets']:
+            if not d['target']:
+                continue
+            u1, v1, u2, v2 = d['box']
+            cu, cv = (u1 + u2) / 2, (v1 + v2) / 2
+            az = pan_t + tracker.frame_angle(cu, hfov)
+            el = tilt_t - tracker.frame_angle(cv, vfov)
+            size = max(tracker.frame_angle(u2, hfov) - tracker.frame_angle(u1, hfov),
+                       tracker.frame_angle(v2, vfov) - tracker.frame_angle(v1, vfov))
+            dist = max(abs(az - az_p), abs(el - el_p))
+            if dist <= max(2.0, 1.5 * size) and (best is None or dist < best[0]):
+                best = (dist, d, az, el, size, cu, cv)
+        if best is None:
+            return None
+        dist, d, az, el, size, cu, cv = best
+        if not template_lost and dist <= size / 2:
+            return None, r['ts']                    # template still on the object
+        frame = self.c.camera.gray_at(r['ts'])
+        if frame is None:
+            return None, r['ts']
+        fts, _exp, gray = frame
+        h, w = gray.shape
+        p = tracker.make_patch(gray, tracker.to_px(cu, w), tracker.to_px(cv, h),
+                               _box_half(d['box'], w, h))
+        if p is None:
+            return None, r['ts']
+        faz.x += az - az_p                          # shift the track onto the box
+        fel.x += el - el_p
+        return p, fts
+
     def _save_log(self) -> None:
         """Per-frame record of the last follow run, for diagnosis."""
         rows = getattr(self, 'log', None)
@@ -288,3 +360,10 @@ class Follower:
 
 class _Lost(Exception):
     pass
+
+
+def _box_half(box, w: int, h: int) -> int:
+    """Template half-size for a detection box: ~80 % of its geometric mean size."""
+    u1, v1, u2, v2 = box
+    bw, bh = (u2 - u1) / 2 * w, (v2 - v1) / 2 * h
+    return int(max(5, min(50, 0.4 * (max(bw, 1) * max(bh, 1)) ** 0.5)))
