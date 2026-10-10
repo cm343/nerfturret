@@ -40,3 +40,6 @@ Thumbs.db
 # Cloned upstream model repo (weights ~200MB, has its own .git) — not vendored.
 # See src/detection.py for the expected weights path.
 Real-Time-Flying-Object-Detection_with_YOLOv8/
+
+# Machine-specific stepper calibration (written by src/homing.py)
+config/calibration.json

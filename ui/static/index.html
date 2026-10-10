@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turret Control</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Turret Control</div>
+  <div class="links">
+    <span class="pill" id="link-ui" title="Browser ↔ laptop app">UI</span>
+    <span class="pill" id="link-pi" title="Laptop app ↔ Pi">Pi</span>
+  </div>
+  <div class="state" id="state">—</div>
+  <div class="sys" id="sys"></div>
+  <button class="estop" id="estop" title="Emergency stop (Esc)">E-STOP</button>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<main class="layout">
+  <section class="left">
+    <div class="video" id="video">
+      <img id="cam" alt="">
+      <svg class="crosshair" id="crosshair" viewBox="-50 -50 100 100" aria-hidden="true">
+        <circle r="9"/><line x1="-22" x2="-4"/><line x1="4" x2="22"/>
+        <line y1="-22" y2="-4"/><line y1="4" y2="22"/>
+      </svg>
+      <div class="hud hud-tl" id="hud-aim"></div>
+      <div class="hud hud-tr" id="hud-fire"></div>
+      <div class="hud hud-bl" id="hud-cam"></div>
+      <div class="cam-msg" id="cam-msg" hidden></div>
+      <div class="track-mark" id="track-mark" hidden></div>
+      <div class="hud hud-br" id="hud-track" hidden></div>
+      <div class="click-mode" id="click-mode" hidden></div>
+    </div>
+    <div class="video-hint">
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move</span>
+      <span><kbd>Shift</kbd> fast · <kbd>Alt</kbd> fine</span>
+      <span><kbd>Space</kbd> fire (load when disarmed)</span>
+      <span><kbd>F</kbd> flywheels</span>
+      <span><kbd>R</kbd> arm</span>
+      <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> mode</span>
+      <span><kbd>Esc</kbd> E-STOP</span>
+      <span>click video: aim there
+        <button class="mini" id="aim-mode" title="auto: after the move, track the clicked spot and correct">…</button></span>
+    </div>
+    <div class="log" id="log" aria-live="polite"></div>
+  </section>
+
+  <section class="right">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="control" aria-selected="true">Control</button>
+      <button role="tab" data-tab="config">Config</button>
+      <button role="tab" data-tab="calibrate">Calibrate</button>
+      <button role="tab" data-tab="diag">Diagnostics</button>
+    </nav>
+
+    <!-- ── Control ─────────────────────────────────────────────── -->
+    <div class="tab" id="tab-control">
+      <div class="card">
+        <div class="row">
+          <button class="big" id="btn-arm">ARM</button>
+          <button class="big" id="btn-spin">Flywheels off</button>
+        </div>
+        <div id="fly-sliders"></div>
+        <div class="wheels">
+          <div><span>Left</span><div class="bar"><i id="bar-l"></i></div><b id="val-l"></b></div>
+          <div><span>Right</span><div class="bar"><i id="bar-r"></i></div><b id="val-r"></b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="seg" id="mode" role="radiogroup" aria-label="Fire mode">
+          <button data-mode="single">Single</button>
+          <button data-mode="burst">Burst</button>
+          <button data-mode="auto">Auto</button>
+        </div>
+        <button class="fire" id="btn-fire">FIRE</button>
+        <div class="row ammo">
+          <span>Ammo <b id="ammo">—</b></span>
+          <span>Shots <b id="shots">0</b></span>
+          <button id="btn-reload">Reload</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Speeds</h3>
+        <div id="speed-sliders"></div>
+        <div class="muted" id="rate-info"></div>
+      </div>
+
+      <div class="card axes" id="axes"></div>
+    </div>
+
+    <!-- ── Config ──────────────────────────────────────────────── -->
+    <div class="tab" id="tab-config" hidden>
+      <div class="card presets">
+        <div class="row">
+          <select id="preset-select" aria-label="Preset"></select>
+          <button id="preset-load">Load</button>
+          <button id="preset-delete" class="quiet">Delete</button>
+        </div>
+        <div class="row">
+          <input id="preset-name" placeholder="preset name" maxlength="40">
+          <button id="preset-save">Save current</button>
+        </div>
+      </div>
+      <div id="config-groups"></div>
+    </div>
+
+    <!-- ── Calibrate ───────────────────────────────────────────── -->
+    <div class="tab" id="tab-calibrate" hidden>
+      <div class="card">
+        <h3>Pan / tilt reference and limits</h3>
+        <p class="muted">No endstops: jog each axis to a visual reference (e.g. barrel level, pointing
+          straight ahead) and set zero. Then jog to each end of the safe travel and set the limits.</p>
+        <div id="cal-axes"></div>
+      </div>
+      <div class="card">
+        <h3>Loader stroke</h3>
+        <p class="muted">Jog the rack fully back and set rest. Jog forward until a dart would be pushed
+          into the flywheels and set front. "Test stroke" runs one slow push-and-return (disarmed only).</p>
+        <div class="row wrap" id="cal-loader-jog"></div>
+        <div class="row">
+          <button id="cal-rest">Set rest here</button>
+          <button id="cal-front">Set front here</button>
+          <button id="cal-test">Test stroke</button>
+        </div>
+        <div class="muted" id="cal-loader-info"></div>
+      </div>
+      <div class="card">
+        <h3>Crosshair (where darts land)</h3>
+        <p class="muted">Fire at a target, then click "Pick impact" and click where the dart hit in the
+          video. The crosshair moves there.</p>
+        <div class="row">
+          <button id="cal-cross">Pick impact</button>
+          <button id="cal-cross-reset" class="quiet">Center</button>
+          <span class="muted" id="cal-cross-val"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Field of view</h3>
+        <p class="muted">Needed for click-to-aim and later for the computer vision.
+          <b>Auto</b>: click one textured spot (a corner, text, a poster) near the centre; the
+          turret steps across and tracks it, then fits the lens. <b>Manual</b>: turn by a known
+          angle and click the same spot twice.</p>
+        <div class="row">
+          <select id="fov-axis"><option value="pan">Horizontal (pan)</option>
+            <option value="tilt">Vertical (tilt)</option></select>
+          <input id="fov-deg" type="number" value="10" min="1" max="40" step="1" aria-label="Turn by degrees"> °
+          <button id="fov-auto">Auto (tracking)</button>
+          <button id="fov-start">Manual</button>
+        </div>
+        <div class="muted" id="fov-info"></div>
+      </div>
+    </div>
+
+    <!-- ── Diagnostics ─────────────────────────────────────────── -->
+    <div class="tab" id="tab-diag" hidden>
+      <div class="card">
+        <h3>Drivers (raw, ignores limits)</h3>
+        <div id="diag-axes"></div>
+      </div>
+      <div class="card"><h3>System</h3><dl class="kv" id="diag-sys"></dl></div>
+      <details class="card"><summary>Raw telemetry</summary><pre id="diag-raw"></pre></details>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

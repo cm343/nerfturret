@@ -1,0 +1,493 @@
+<title>Nerf Turret Wiring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: drafting-sheet page — title block, full-width schematic, then reference sections in a two-column grid */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --ink:#17202a; --muted:#5a6572; --line:#cdd4dc; --gridc:rgba(23,32,42,.05);
+  --pwr:#c42f2f; --gnd:#353e49; --sig:#1d68c8; --v5:#b87700; --v33:#7447bf; --add:#c42f2f;
+  --addbg:#fbecec;
+  --display:"Archivo Narrow","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10151b; --panel:#171e26; --ink:#e3e8ee; --muted:#97a2ae; --line:#2b3540; --gridc:rgba(227,232,238,.045);
+  --pwr:#f06262; --gnd:#a3aebb; --sig:#5ea3ff; --v5:#f0b23d; --v33:#ad8bf0; --add:#f06262;
+  --addbg:#2a1719; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10151b; --panel:#171e26; --ink:#e3e8ee; --muted:#97a2ae; --line:#2b3540; --gridc:rgba(227,232,238,.045);
+  --pwr:#f06262; --gnd:#a3aebb; --sig:#5ea3ff; --v5:#f0b23d; --v33:#ad8bf0; --add:#f06262;
+  --addbg:#2a1719; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--body);
+  background-image:linear-gradient(var(--gridc) 1px,transparent 1px),linear-gradient(90deg,var(--gridc) 1px,transparent 1px);
+  background-size:24px 24px}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:28px 56px;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;letter-spacing:.005em}
+h1{font-size:clamp(28px,4.4vw,40px);font-weight:700;line-height:1.05}
+h2{font-size:22px;font-weight:600}
+h3{font-size:16px;font-weight:600}
+p{margin:0}
+.mono{font-family:var(--mono);font-size:13px}
+
+.titleblock{display:grid;grid-template-columns:1fr auto;gap:16px 28px;align-items:end;border-bottom:2px solid var(--ink);padding-bottom:16px}
+.titleblock p{color:var(--muted);max-width:62ch;margin-top:8px}
+.meta{display:grid;grid-template-columns:auto auto;gap:2px 14px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500}
+@media (max-width:640px){.titleblock{grid-template-columns:1fr}}
+
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:22px;height:0;border-top:3px solid}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.schem{display:block;width:100%;min-width:900px;height:auto}
+
+/* svg */
+.blk{fill:var(--panel);stroke:var(--ink);stroke-width:1.4}
+.blk-add{stroke:var(--add);stroke-dasharray:6 4;fill:var(--addbg)}
+.blk-pi{stroke-width:1.6}
+.t1{font:700 17px var(--display);fill:var(--ink)}
+.t2{font:600 14px var(--display);fill:var(--ink)}
+.t3{font:400 11.5px var(--mono);fill:var(--muted)}
+.tiny{font-size:10px}
+.tag{font:600 10px var(--mono);fill:var(--add);letter-spacing:.08em}
+.lbl-pwr{fill:var(--pwr)} .lbl-gnd{fill:var(--gnd)} .lbl-sig{fill:var(--sig)} .lbl-v5{fill:var(--v5)}
+.w-pwr,.w-gnd,.w-sig,.w-v5,.w-coil,.w-cap,.w-capplate{fill:none;stroke-linecap:round}
+.w-pwr{stroke:var(--pwr);stroke-width:2.6}
+.w-gnd{stroke:var(--gnd);stroke-width:2.6}
+.rail{stroke-width:4.5}
+.w-sig{stroke:var(--sig);stroke-width:2.4;stroke-dasharray:7 4}
+.w-v5{stroke:var(--v5);stroke-width:2.6}
+.w-coil{stroke:var(--muted);stroke-width:1.5}
+.w-cap{stroke:var(--ink);stroke-width:1.4}
+.w-capplate{stroke:var(--ink);stroke-width:2.4}
+.d-pwr{fill:var(--pwr)} .d-gnd{fill:var(--gnd)} .d-sig{fill:var(--sig)} .d-v5{fill:var(--v5)}
+.motor{fill:var(--panel);stroke:var(--ink);stroke-width:1.4}
+.mtxt{fill:var(--ink);font-weight:600}
+.pin{stroke-width:1.4}
+.p-free{fill:var(--panel);stroke:var(--line)}
+.p-gnd{fill:var(--gnd);stroke:var(--gnd)}
+.p-gnd-free{fill:var(--panel);stroke:var(--gnd)}
+.p-sig{fill:var(--sig);stroke:var(--sig)}
+.p-v5{fill:var(--v5);stroke:var(--v5)}
+.p-v33{fill:var(--v33);stroke:var(--v33)}
+.pinno{font:600 8.5px var(--mono);fill:var(--panel)}
+.pn-free,.pn-gnd-free{fill:var(--muted)}
+
+/* sections */
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+@media (max-width:860px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card.alert{border:1.5px solid var(--add)}
+.card ul,.card ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.card li{max-width:68ch}
+.eyebrow{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.alert .eyebrow{color:var(--add)}
+.kbd{font-family:var(--mono);font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:0 5px;white-space:nowrap}
+
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--ink)}
+tr.grp th{font:600 14px var(--display);padding-top:14px;color:var(--ink);border-bottom:1px solid var(--line)}
+td.num{font-variant-numeric:tabular-nums;width:56px}
+td.note{color:var(--muted);font-size:13px}
+.chip{display:inline-block;min-width:30px;text-align:center;font:600 12px var(--mono);padding:2px 6px;border-radius:12px;color:var(--panel)}
+.c-sig{background:var(--sig)} .c-gnd{background:var(--gnd)} .c-v5{background:var(--v5)} .c-v33{background:var(--v33)}
+.tablewrap{overflow-x:auto}
+.tablewrap table{min-width:560px}
+.dip td,.dip th{text-align:center;font-family:var(--mono);font-size:13px}
+.dip td:first-child,.dip th:first-child{text-align:left}
+.dip tr.pick td{color:var(--sig);font-weight:600}
+.calc{font-family:var(--mono);font-size:13px;background:var(--bg);border-left:3px solid var(--sig);padding:10px 12px;border-radius:0 4px 4px 0;overflow-x:auto}
+.q{counter-reset:q;list-style:none;padding-left:0!important}
+.q li{counter-increment:q;display:grid;grid-template-columns:28px 1fr;gap:8px}
+.q li::before{content:counter(q);font:700 13px var(--mono);color:var(--panel);background:var(--ink);border-radius:50%;width:22px;height:22px;display:grid;place-items:center;margin-top:1px}
+</style>
+
+<div class="wrap">
+  <header class="titleblock">
+    <div>
+      <h1>Nerf Turret Wiring</h1>
+      <p>One 4S pack feeds a common bus. Two ESCs spin the flywheels, three HW-216/DRV8825 boards drive pan, tilt and loader, and a buck converter powers the Raspberry Pi, which sends every control signal.</p>
+    </div>
+    <div class="meta">
+      <span>Supply</span><b>4S LiPo, 16.8 V max</b>
+      <span>Logic</span><b>3.3 V (Pi GPIO)</b>
+      <span>Rev</span><b>C · 2026-10-09</b>
+    </div>
+  </header>
+
+  <section class="sheet" aria-label="Schematic">
+    <div class="legend">
+      <span><i class="sw" style="border-color:var(--pwr)"></i>+V battery</span>
+      <span><i class="sw" style="border-color:var(--gnd)"></i>Ground</span>
+      <span><i class="sw" style="border-color:var(--v5)"></i>5 V</span>
+      <span><i class="sw" style="border-top-style:dashed;border-color:var(--sig)"></i>Signal bundle to Pi</span>
+      <span><i class="sw" style="border-top-width:2px;border-color:var(--add);border-top-style:dashed"></i>Dashed red box: not in your parts list yet</span>
+      <span>Dot = joined · crossing without a dot = not joined</span>
+    </div>
+    <div class="scroll">
+<svg viewBox="0 0 1300 770" role="img" aria-label="Wiring schematic: 4S LiPo through main disconnect to a power bus feeding two ESCs, three HW-216 stepper drivers and a 5 V buck converter for the Raspberry Pi; signal wires from the Pi to every driver and ESC." class="schem">
+<rect x="20" y="28" width="180" height="76" rx="4" class="blk"/>
+<text x="34" y="54" class="t1" text-anchor="start">4S LiPo</text>
+<text x="34" y="74" class="t3" text-anchor="start">14.8 V nom · 16.8 V full</text>
+<text x="34" y="92" class="t3" text-anchor="start">XT60 male lead</text>
+<path d="M80 104 V124" class="w-pwr"/>
+<path d="M140 104 V124" class="w-gnd"/>
+<rect x="20" y="124" width="180" height="72" rx="4" class="blk blk-add"/>
+<text x="34" y="146" class="t2" text-anchor="start">Main disconnect</text>
+<text x="34" y="165" class="t3" text-anchor="start">fuse 40 A on + only</text>
+<text x="34" y="183" class="t3" text-anchor="start">XT60 loop key / switch</text>
+<text x="196" y="117" class="tag" text-anchor="end">ADD</text>
+<path d="M200 150 H1270" class="w-pwr rail"/>
+<path d="M200 175 H1270" class="w-gnd rail"/>
+<text x="1270" y="140" class="t3 lbl-pwr" text-anchor="end">+V BAT  14–16.8 V</text>
+<text x="1270" y="196" class="t3 lbl-gnd" text-anchor="end">GND</text>
+<path d="M240 150 V286 H200" class="w-pwr"/>
+<circle cx="240" cy="150" r="4.2" class="d-pwr"/>
+<path d="M258 175 V316 H200" class="w-gnd"/>
+<circle cx="258" cy="175" r="4.2" class="d-gnd"/>
+<rect x="20" y="262" width="180" height="78" rx="4" class="blk blk-add"/>
+<text x="34" y="285" class="t2" text-anchor="start">5 V buck converter</text>
+<text x="34" y="304" class="t3" text-anchor="start">≥ 3 A · trim to 5.1 V</text>
+<text x="34" y="322" class="t3" text-anchor="start">input ≥ 17 V rated</text>
+<text x="196" y="255" class="tag" text-anchor="end">ADD</text>
+<path d="M80 340 V600" class="w-v5"/>
+<circle cx="80" cy="600" r="4.2" class="d-v5"/>
+<path d="M140 340 V600" class="w-gnd"/>
+<circle cx="140" cy="600" r="4.2" class="d-gnd"/>
+<text x="88" y="470" class="t3 lbl-v5" text-anchor="start">5 V → pins 2, 4</text>
+<text x="148" y="500" class="t3 lbl-gnd" text-anchor="start">GND → pin 6</text>
+<path d="M330 150 V250" class="w-pwr"/>
+<circle cx="330" cy="150" r="4.2" class="d-pwr"/>
+<path d="M360 175 V250" class="w-gnd"/>
+<circle cx="360" cy="175" r="4.2" class="d-gnd"/>
+<rect x="300" y="250" width="170" height="120" rx="4" class="blk"/>
+<text x="312" y="274" class="t2" text-anchor="start">ESC 1</text>
+<text x="312" y="294" class="t3" text-anchor="start">40 A · 2–4S</text>
+<text x="312" y="312" class="t3" text-anchor="start">flywheel left</text>
+<text x="312" y="330" class="t3" text-anchor="start">BEC wire: not used</text>
+<path d="M413 370 V406.5" class="w-coil"/>
+<path d="M425 370 V404.0" class="w-coil"/>
+<path d="M437 370 V406.5" class="w-coil"/>
+<circle cx="425" cy="434" r="30" class="motor"/>
+<text x="425" y="438" class="t3 mtxt" text-anchor="middle">BLDC</text>
+<text x="425" y="482" class="t3" text-anchor="middle">Flywheel L</text>
+<text x="445" y="386" class="t3 tiny" text-anchor="start">3φ</text>
+<path d="M330 370 V600" class="w-sig"/>
+<circle cx="330" cy="600" r="4.2" class="d-sig"/>
+<text x="338" y="394" class="t3 tiny" text-anchor="start">Pi pins</text>
+<text x="338" y="412" class="t3 lbl-sig" text-anchor="start">SIG 32</text>
+<text x="338" y="428" class="t3 lbl-sig" text-anchor="start">GND 30</text>
+<path d="M530 150 V250" class="w-pwr"/>
+<circle cx="530" cy="150" r="4.2" class="d-pwr"/>
+<path d="M560 175 V250" class="w-gnd"/>
+<circle cx="560" cy="175" r="4.2" class="d-gnd"/>
+<rect x="500" y="250" width="170" height="120" rx="4" class="blk"/>
+<text x="512" y="274" class="t2" text-anchor="start">ESC 2</text>
+<text x="512" y="294" class="t3" text-anchor="start">40 A · 2–4S</text>
+<text x="512" y="312" class="t3" text-anchor="start">flywheel right</text>
+<text x="512" y="330" class="t3" text-anchor="start">BEC wire: not used</text>
+<path d="M613 370 V406.5" class="w-coil"/>
+<path d="M625 370 V404.0" class="w-coil"/>
+<path d="M637 370 V406.5" class="w-coil"/>
+<circle cx="625" cy="434" r="30" class="motor"/>
+<text x="625" y="438" class="t3 mtxt" text-anchor="middle">BLDC</text>
+<text x="625" y="482" class="t3" text-anchor="middle">Flywheel R</text>
+<text x="645" y="386" class="t3 tiny" text-anchor="start">3φ</text>
+<path d="M530 370 V600" class="w-sig"/>
+<circle cx="530" cy="600" r="4.2" class="d-sig"/>
+<text x="538" y="394" class="t3 tiny" text-anchor="start">Pi pins</text>
+<text x="538" y="412" class="t3 lbl-sig" text-anchor="start">SIG 33</text>
+<text x="538" y="428" class="t3 lbl-sig" text-anchor="start">GND 34</text>
+<path d="M730 150 V250" class="w-pwr"/>
+<circle cx="730" cy="150" r="4.2" class="d-pwr"/>
+<path d="M760 175 V250" class="w-gnd"/>
+<circle cx="760" cy="175" r="4.2" class="d-gnd"/>
+<path d="M730 218 H743 M747 218 H760" class="w-cap"/>
+<path d="M743 209 V227 M747 209 V227" class="w-capplate"/>
+<circle cx="730" cy="218" r="4.2" class="d-pwr"/>
+<circle cx="760" cy="218" r="4.2" class="d-gnd"/>
+<text x="768" y="222" class="t3" text-anchor="start">100 µF 100 V</text>
+<text x="768" y="206" class="t3 lbl-pwr" text-anchor="start">+</text>
+<rect x="700" y="250" width="170" height="120" rx="4" class="blk"/>
+<text x="712" y="274" class="t2" text-anchor="start">Driver 1 · Pan</text>
+<text x="712" y="294" class="t3" text-anchor="start">HW-216 + DRV8825</text>
+<text x="712" y="312" class="t3" text-anchor="start">VMOT ← bus</text>
+<text x="712" y="330" class="t3" text-anchor="start">M2→3V3: 1/16 step</text>
+<path d="M807 370 V410.0" class="w-coil"/>
+<path d="M819 370 V404.6" class="w-coil"/>
+<path d="M831 370 V404.6" class="w-coil"/>
+<path d="M843 370 V410.0" class="w-coil"/>
+<circle cx="825" cy="434" r="30" class="motor"/>
+<text x="825" y="438" class="t3 mtxt" text-anchor="middle">M</text>
+<text x="825" y="482" class="t3" text-anchor="middle">Pan NEMA 17</text>
+<text x="804" y="386" class="t3 tiny" text-anchor="start">A1A2 B1B2</text>
+<path d="M730 370 V600" class="w-sig"/>
+<circle cx="730" cy="600" r="4.2" class="d-sig"/>
+<text x="738" y="394" class="t3 tiny" text-anchor="start">Pi pins</text>
+<text x="738" y="412" class="t3 lbl-sig" text-anchor="start">STEP 36</text>
+<text x="738" y="428" class="t3 lbl-sig" text-anchor="start">DIR 38</text>
+<text x="738" y="444" class="t3 lbl-sig" text-anchor="start">EN 31</text>
+<text x="738" y="460" class="t3 lbl-sig" text-anchor="start">GND 39</text>
+<path d="M930 150 V250" class="w-pwr"/>
+<circle cx="930" cy="150" r="4.2" class="d-pwr"/>
+<path d="M960 175 V250" class="w-gnd"/>
+<circle cx="960" cy="175" r="4.2" class="d-gnd"/>
+<path d="M930 218 H943 M947 218 H960" class="w-cap"/>
+<path d="M943 209 V227 M947 209 V227" class="w-capplate"/>
+<circle cx="930" cy="218" r="4.2" class="d-pwr"/>
+<circle cx="960" cy="218" r="4.2" class="d-gnd"/>
+<text x="968" y="222" class="t3" text-anchor="start">100 µF 100 V</text>
+<text x="968" y="206" class="t3 lbl-pwr" text-anchor="start">+</text>
+<rect x="900" y="250" width="170" height="120" rx="4" class="blk"/>
+<text x="912" y="274" class="t2" text-anchor="start">Driver 2 · Tilt</text>
+<text x="912" y="294" class="t3" text-anchor="start">HW-216 + DRV8825</text>
+<text x="912" y="312" class="t3" text-anchor="start">VMOT ← bus</text>
+<text x="912" y="330" class="t3" text-anchor="start">M2→3V3: 1/16 step</text>
+<path d="M1007 370 V410.0" class="w-coil"/>
+<path d="M1019 370 V404.6" class="w-coil"/>
+<path d="M1031 370 V404.6" class="w-coil"/>
+<path d="M1043 370 V410.0" class="w-coil"/>
+<circle cx="1025" cy="434" r="30" class="motor"/>
+<text x="1025" y="438" class="t3 mtxt" text-anchor="middle">M</text>
+<text x="1025" y="482" class="t3" text-anchor="middle">Tilt NEMA 17</text>
+<text x="1004" y="386" class="t3 tiny" text-anchor="start">A1A2 B1B2</text>
+<path d="M930 370 V600" class="w-sig"/>
+<circle cx="930" cy="600" r="4.2" class="d-sig"/>
+<text x="938" y="394" class="t3 tiny" text-anchor="start">Pi pins</text>
+<text x="938" y="412" class="t3 lbl-sig" text-anchor="start">STEP 16</text>
+<text x="938" y="428" class="t3 lbl-sig" text-anchor="start">DIR 18</text>
+<text x="938" y="444" class="t3 lbl-sig" text-anchor="start">EN 29</text>
+<text x="938" y="460" class="t3 lbl-sig" text-anchor="start">GND 20</text>
+<path d="M1130 150 V250" class="w-pwr"/>
+<circle cx="1130" cy="150" r="4.2" class="d-pwr"/>
+<path d="M1160 175 V250" class="w-gnd"/>
+<circle cx="1160" cy="175" r="4.2" class="d-gnd"/>
+<path d="M1130 218 H1143 M1147 218 H1160" class="w-cap"/>
+<path d="M1143 209 V227 M1147 209 V227" class="w-capplate"/>
+<circle cx="1130" cy="218" r="4.2" class="d-pwr"/>
+<circle cx="1160" cy="218" r="4.2" class="d-gnd"/>
+<text x="1168" y="222" class="t3" text-anchor="start">100 µF 100 V</text>
+<text x="1168" y="206" class="t3 lbl-pwr" text-anchor="start">+</text>
+<rect x="1100" y="250" width="170" height="120" rx="4" class="blk"/>
+<text x="1112" y="274" class="t2" text-anchor="start">Driver 3 · Loader</text>
+<text x="1112" y="294" class="t3" text-anchor="start">HW-216 + DRV8825</text>
+<text x="1112" y="312" class="t3" text-anchor="start">VMOT ← bus</text>
+<text x="1112" y="330" class="t3" text-anchor="start">M0,M1→3V3: 1/8 step</text>
+<path d="M1207 370 V410.0" class="w-coil"/>
+<path d="M1219 370 V404.6" class="w-coil"/>
+<path d="M1231 370 V404.6" class="w-coil"/>
+<path d="M1243 370 V410.0" class="w-coil"/>
+<circle cx="1225" cy="434" r="30" class="motor"/>
+<text x="1225" y="438" class="t3 mtxt" text-anchor="middle">M</text>
+<text x="1225" y="482" class="t3" text-anchor="middle">Loader NEMA 17</text>
+<text x="1204" y="386" class="t3 tiny" text-anchor="start">A1A2 B1B2</text>
+<path d="M1130 370 V600" class="w-sig"/>
+<circle cx="1130" cy="600" r="4.2" class="d-sig"/>
+<text x="1138" y="394" class="t3 tiny" text-anchor="start">Pi pins</text>
+<text x="1138" y="412" class="t3 lbl-sig" text-anchor="start">STEP 11</text>
+<text x="1138" y="428" class="t3 lbl-sig" text-anchor="start">DIR 13</text>
+<text x="1138" y="444" class="t3 lbl-sig" text-anchor="start">EN 7</text>
+<text x="1138" y="460" class="t3 lbl-sig" text-anchor="start">GND 9</text>
+<rect x="20" y="600" width="1260" height="150" rx="4" class="blk blk-pi"/>
+<text x="190" y="636" class="t1" text-anchor="start">Raspberry Pi 4B</text>
+<text x="190" y="658" class="t3" text-anchor="start">3.3 V GPIO · never put 5 V on a GPIO pin</text>
+<text x="190" y="678" class="t3" text-anchor="start">Wire labels = physical header pin</text>
+<text x="190" y="698" class="t3" text-anchor="start">All grounds tied together through the Pi</text>
+<circle cx="590" cy="676" r="11" class="pin p-v33"><title>Pin 1</title></circle>
+<text x="590" y="679.5" class="pinno pn-v33" text-anchor="middle">1</text>
+<circle cx="590" cy="704" r="11" class="pin p-v5"><title>Pin 2</title></circle>
+<text x="590" y="707.5" class="pinno pn-v5" text-anchor="middle">2</text>
+<circle cx="622" cy="676" r="11" class="pin p-free"><title>Pin 3</title></circle>
+<text x="622" y="679.5" class="pinno pn-free" text-anchor="middle">3</text>
+<circle cx="622" cy="704" r="11" class="pin p-v5"><title>Pin 4</title></circle>
+<text x="622" y="707.5" class="pinno pn-v5" text-anchor="middle">4</text>
+<circle cx="654" cy="676" r="11" class="pin p-free"><title>Pin 5</title></circle>
+<text x="654" y="679.5" class="pinno pn-free" text-anchor="middle">5</text>
+<circle cx="654" cy="704" r="11" class="pin p-gnd"><title>Pin 6</title></circle>
+<text x="654" y="707.5" class="pinno pn-gnd" text-anchor="middle">6</text>
+<circle cx="686" cy="676" r="11" class="pin p-sig"><title>Pin 7</title></circle>
+<text x="686" y="679.5" class="pinno pn-sig" text-anchor="middle">7</text>
+<circle cx="686" cy="704" r="11" class="pin p-free"><title>Pin 8</title></circle>
+<text x="686" y="707.5" class="pinno pn-free" text-anchor="middle">8</text>
+<circle cx="718" cy="676" r="11" class="pin p-gnd"><title>Pin 9</title></circle>
+<text x="718" y="679.5" class="pinno pn-gnd" text-anchor="middle">9</text>
+<circle cx="718" cy="704" r="11" class="pin p-free"><title>Pin 10</title></circle>
+<text x="718" y="707.5" class="pinno pn-free" text-anchor="middle">10</text>
+<circle cx="750" cy="676" r="11" class="pin p-sig"><title>Pin 11</title></circle>
+<text x="750" y="679.5" class="pinno pn-sig" text-anchor="middle">11</text>
+<circle cx="750" cy="704" r="11" class="pin p-free"><title>Pin 12</title></circle>
+<text x="750" y="707.5" class="pinno pn-free" text-anchor="middle">12</text>
+<circle cx="782" cy="676" r="11" class="pin p-sig"><title>Pin 13</title></circle>
+<text x="782" y="679.5" class="pinno pn-sig" text-anchor="middle">13</text>
+<circle cx="782" cy="704" r="11" class="pin p-gnd-free"><title>Pin 14</title></circle>
+<text x="782" y="707.5" class="pinno pn-gnd-free" text-anchor="middle">14</text>
+<circle cx="814" cy="676" r="11" class="pin p-free"><title>Pin 15</title></circle>
+<text x="814" y="679.5" class="pinno pn-free" text-anchor="middle">15</text>
+<circle cx="814" cy="704" r="11" class="pin p-sig"><title>Pin 16</title></circle>
+<text x="814" y="707.5" class="pinno pn-sig" text-anchor="middle">16</text>
+<circle cx="846" cy="676" r="11" class="pin p-v33"><title>Pin 17</title></circle>
+<text x="846" y="679.5" class="pinno pn-v33" text-anchor="middle">17</text>
+<circle cx="846" cy="704" r="11" class="pin p-sig"><title>Pin 18</title></circle>
+<text x="846" y="707.5" class="pinno pn-sig" text-anchor="middle">18</text>
+<circle cx="878" cy="676" r="11" class="pin p-free"><title>Pin 19</title></circle>
+<text x="878" y="679.5" class="pinno pn-free" text-anchor="middle">19</text>
+<circle cx="878" cy="704" r="11" class="pin p-gnd"><title>Pin 20</title></circle>
+<text x="878" y="707.5" class="pinno pn-gnd" text-anchor="middle">20</text>
+<circle cx="910" cy="676" r="11" class="pin p-free"><title>Pin 21</title></circle>
+<text x="910" y="679.5" class="pinno pn-free" text-anchor="middle">21</text>
+<circle cx="910" cy="704" r="11" class="pin p-free"><title>Pin 22</title></circle>
+<text x="910" y="707.5" class="pinno pn-free" text-anchor="middle">22</text>
+<circle cx="942" cy="676" r="11" class="pin p-free"><title>Pin 23</title></circle>
+<text x="942" y="679.5" class="pinno pn-free" text-anchor="middle">23</text>
+<circle cx="942" cy="704" r="11" class="pin p-free"><title>Pin 24</title></circle>
+<text x="942" y="707.5" class="pinno pn-free" text-anchor="middle">24</text>
+<circle cx="974" cy="676" r="11" class="pin p-gnd-free"><title>Pin 25</title></circle>
+<text x="974" y="679.5" class="pinno pn-gnd-free" text-anchor="middle">25</text>
+<circle cx="974" cy="704" r="11" class="pin p-free"><title>Pin 26</title></circle>
+<text x="974" y="707.5" class="pinno pn-free" text-anchor="middle">26</text>
+<circle cx="1006" cy="676" r="11" class="pin p-free"><title>Pin 27</title></circle>
+<text x="1006" y="679.5" class="pinno pn-free" text-anchor="middle">27</text>
+<circle cx="1006" cy="704" r="11" class="pin p-free"><title>Pin 28</title></circle>
+<text x="1006" y="707.5" class="pinno pn-free" text-anchor="middle">28</text>
+<circle cx="1038" cy="676" r="11" class="pin p-sig"><title>Pin 29</title></circle>
+<text x="1038" y="679.5" class="pinno pn-sig" text-anchor="middle">29</text>
+<circle cx="1038" cy="704" r="11" class="pin p-gnd"><title>Pin 30</title></circle>
+<text x="1038" y="707.5" class="pinno pn-gnd" text-anchor="middle">30</text>
+<circle cx="1070" cy="676" r="11" class="pin p-sig"><title>Pin 31</title></circle>
+<text x="1070" y="679.5" class="pinno pn-sig" text-anchor="middle">31</text>
+<circle cx="1070" cy="704" r="11" class="pin p-sig"><title>Pin 32</title></circle>
+<text x="1070" y="707.5" class="pinno pn-sig" text-anchor="middle">32</text>
+<circle cx="1102" cy="676" r="11" class="pin p-sig"><title>Pin 33</title></circle>
+<text x="1102" y="679.5" class="pinno pn-sig" text-anchor="middle">33</text>
+<circle cx="1102" cy="704" r="11" class="pin p-gnd"><title>Pin 34</title></circle>
+<text x="1102" y="707.5" class="pinno pn-gnd" text-anchor="middle">34</text>
+<circle cx="1134" cy="676" r="11" class="pin p-free"><title>Pin 35</title></circle>
+<text x="1134" y="679.5" class="pinno pn-free" text-anchor="middle">35</text>
+<circle cx="1134" cy="704" r="11" class="pin p-sig"><title>Pin 36</title></circle>
+<text x="1134" y="707.5" class="pinno pn-sig" text-anchor="middle">36</text>
+<circle cx="1166" cy="676" r="11" class="pin p-free"><title>Pin 37</title></circle>
+<text x="1166" y="679.5" class="pinno pn-free" text-anchor="middle">37</text>
+<circle cx="1166" cy="704" r="11" class="pin p-sig"><title>Pin 38</title></circle>
+<text x="1166" y="707.5" class="pinno pn-sig" text-anchor="middle">38</text>
+<circle cx="1198" cy="676" r="11" class="pin p-gnd"><title>Pin 39</title></circle>
+<text x="1198" y="679.5" class="pinno pn-gnd" text-anchor="middle">39</text>
+<circle cx="1198" cy="704" r="11" class="pin p-free"><title>Pin 40</title></circle>
+<text x="1198" y="707.5" class="pinno pn-free" text-anchor="middle">40</text>
+<text x="568" y="680" class="t3 tiny" text-anchor="end">odd</text>
+<text x="568" y="708" class="t3 tiny" text-anchor="end">even</text>
+<text x="590" y="735" class="t3 tiny" text-anchor="start">pin 1 = 3.3 V corner (square pad on the board)</text>
+</svg>
+    </div>
+  </section>
+
+  <section class="card alert">
+    <span class="eyebrow">Missing before first power-up</span>
+    <h2>Three things the parts list doesn't cover</h2>
+    <ol>
+      <li><b>A 5 V buck converter, 3 A or more.</b> Nothing in the list turns 16.8 V into 5 V for the Pi. The Pi 4B wants 5.1 V at up to 3 A. Pick one whose input is rated well above 16.8 V and trim it to 5.1 V <i>before</i> connecting the Pi. Feeding pins 2/4 skips the Pi's input fuse; a USB-C pigtail from the buck is the safer route if you have one.</li>
+      <li><b>A main fuse and a real disconnect.</b> Two 40 A ESCs can pull far more than a hobby rocker switch handles; a 10 A switch will weld shut. Use an XT60 loop key (or an anti-spark switch) and a 30–40 A blade fuse on the + lead, right after the battery.</li>
+      <li><b>Something watching cell voltage.</b> No part in this design measures the pack. A cheap LiPo alarm on the balance lead stops you from over-discharging it.</li>
+    </ol>
+    <p style="color:var(--muted)">Wire gauge: battery to bus 12–14 AWG, bus to each ESC 14 AWG, shared stepper trunk 20–22 AWG, branch to each VMOT, buck and motor coils 24 AWG, signals 24–26 AWG (Dupont is fine). Use stranded wire for anything that moves with the turret.</p>
+  </section>
+
+  <section class="card">
+    <span class="eyebrow">Raspberry Pi header</span>
+    <h2>Pin map</h2>
+    <p style="color:var(--muted)">STEP and DIR sit in GPIO 16–27, which default to pull-down at boot, so no driver sees a stray step while the Pi starts. EN sits on GPIO 4–6, which default to pull-up, so all three drivers stay disabled (motors unpowered) until your code drives EN low. GPIO 12/13 are the hardware-PWM pins. I²C, UART and SPI stay free for a camera, IMU or display later.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Pin</th><th>BCM</th><th>Signal</th><th>Goes to</th><th>Note</th></tr></thead>
+        <tbody>
+<tr class="grp"><th colspan="5">Driver 1 · Pan</th></tr>
+<tr><td class="num"><span class="chip c-sig">36</span></td><td class="mono">GPIO 16</td><td>STEP</td><td>HW-216 #1 STEP</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">38</span></td><td class="mono">GPIO 20</td><td>DIR</td><td>HW-216 #1 DIR</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">31</span></td><td class="mono">GPIO 6</td><td>EN</td><td>HW-216 #1 EN</td><td class="note">LOW = enabled · boots HIGH (off); optional 10 kΩ to 3.3 V for margin</td></tr>
+<tr><td class="num"><span class="chip c-gnd">39</span></td><td class="mono">—</td><td>GND</td><td>HW-216 #1 GND (logic)</td><td class="note"></td></tr>
+<tr class="grp"><th colspan="5">Driver 2 · Tilt</th></tr>
+<tr><td class="num"><span class="chip c-sig">16</span></td><td class="mono">GPIO 23</td><td>STEP</td><td>HW-216 #2 STEP</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">18</span></td><td class="mono">GPIO 24</td><td>DIR</td><td>HW-216 #2 DIR</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">29</span></td><td class="mono">GPIO 5</td><td>EN</td><td>HW-216 #2 EN</td><td class="note">LOW = enabled · boots HIGH (off); optional 10 kΩ to 3.3 V for margin</td></tr>
+<tr><td class="num"><span class="chip c-gnd">20</span></td><td class="mono">—</td><td>GND</td><td>HW-216 #2 GND (logic)</td><td class="note"></td></tr>
+<tr class="grp"><th colspan="5">Driver 3 · Loader</th></tr>
+<tr><td class="num"><span class="chip c-sig">11</span></td><td class="mono">GPIO 17</td><td>STEP</td><td>HW-216 #3 STEP</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">13</span></td><td class="mono">GPIO 27</td><td>DIR</td><td>HW-216 #3 DIR</td><td class="note"></td></tr>
+<tr><td class="num"><span class="chip c-sig">7</span></td><td class="mono">GPIO 4</td><td>EN</td><td>HW-216 #3 EN</td><td class="note">LOW = enabled · boots HIGH (off); optional 10 kΩ to 3.3 V for margin</td></tr>
+<tr><td class="num"><span class="chip c-gnd">9</span></td><td class="mono">—</td><td>GND</td><td>HW-216 #3 GND (logic)</td><td class="note"></td></tr>
+<tr class="grp"><th colspan="5">Driver logic supply</th></tr>
+<tr><td class="num"><span class="chip c-v33">1</span></td><td class="mono">—</td><td>3.3 V</td><td>VCC, RST and SLP on all three HW-216</td><td class="note">Required: M0–M2 microstep pins and RST/SLP tie up to it</td></tr>
+<tr><td class="num"><span class="chip c-v33">17</span></td><td class="mono">—</td><td>3.3 V</td><td>spare</td><td class="note"></td></tr>
+<tr class="grp"><th colspan="5">ESC 1 · Flywheel L</th></tr>
+<tr><td class="num"><span class="chip c-sig">32</span></td><td class="mono">GPIO 12</td><td>SIG</td><td>ESC 1 servo lead, white/yellow</td><td class="note">50 Hz, 1000–2000 µs</td></tr>
+<tr><td class="num"><span class="chip c-gnd">30</span></td><td class="mono">—</td><td>GND</td><td>ESC 1 servo lead, black/brown</td><td class="note">Red BEC wire: leave unconnected</td></tr>
+<tr class="grp"><th colspan="5">ESC 2 · Flywheel R</th></tr>
+<tr><td class="num"><span class="chip c-sig">33</span></td><td class="mono">GPIO 13</td><td>SIG</td><td>ESC 2 servo lead, white/yellow</td><td class="note">50 Hz, 1000–2000 µs</td></tr>
+<tr><td class="num"><span class="chip c-gnd">34</span></td><td class="mono">—</td><td>GND</td><td>ESC 2 servo lead, black/brown</td><td class="note">Red BEC wire: leave unconnected</td></tr>
+<tr class="grp"><th colspan="5">Pi power</th></tr>
+<tr><td class="num"><span class="chip c-v5">2</span></td><td class="mono">—</td><td>5 V</td><td>Buck converter +5.1 V</td><td class="note">Bypasses Pi input protection</td></tr>
+<tr><td class="num"><span class="chip c-v5">4</span></td><td class="mono">—</td><td>5 V</td><td>Buck converter +5.1 V</td><td class="note">Use both 5 V pins</td></tr>
+<tr><td class="num"><span class="chip c-gnd">6</span></td><td class="mono">—</td><td>GND</td><td>Buck converter GND</td><td class="note"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <span class="eyebrow">HW-216 boards × 3</span>
+      <h2>Stepper driver setup</h2>
+      <ul>
+        <li><b>Motor power:</b> the screw terminal (often marked 9–42 V or VMOT/GND) goes to the bus. 16.8 V is well inside the DRV8825's 8.2–45 V range.</li>
+        <li><b>Capacitor:</b> one 100 µF 100 V cap per board, right at the motor-power terminal. Stripe = negative. Many HW-216 boards already carry one; adding yours in parallel does no harm.</li>
+        <li><b>Logic VCC: required.</b> Connect Pi 3.3 V; the DRV8825 reads that as high. The microstep pins M0–M2 and RST/SLP are tied up to it.</li>
+        <li><b>RST and SLP: required.</b> Both must be high or the DRV8825 stays asleep: no motor current and V<sub>ref</sub> reads 0 V. If the HW-216 brings them out as separate pins, jumper RST to SLP and both to VCC (3.3 V). The Pi must be powered while you set V<sub>ref</sub>, since VCC comes from it.</li>
+        <li><b>Coils:</b> A1/A2 to one coil, B1/B2 to the other. Find the pairs with a multimeter (low resistance between wires of one coil). Never unplug a motor while the board is powered; that kills DRV8825s.</li>
+        <li><b>Current limit:</b> set before the first run with VMOT on; the motor can be disconnected (Vref doesn't depend on it). Only plug or unplug the motor with VMOT off.</li>
+      </ul>
+      <div class="calc">I<sub>max</sub> = 2 × V<sub>ref</sub> &nbsp;→&nbsp; V<sub>ref</sub> = 0.5 × (0.7 × I<sub>rated</sub>)<br>these motors: 1.3 A, 3.0 Ω pancake NEMA 17 → V<sub>ref</sub> ≈ 0.45 V (never above 0.65 V)</div>
+      <p style="color:var(--muted);font-size:14px">Measure V<sub>ref</sub> between the trimpot wiper and GND. Glue a heatsink on each DRV8825 above about 1 A.</p>
+      <h3>Microstep pins M0–M2 (on = wired to 3.3 V)</h3>
+      <p style="color:var(--muted);font-size:14px">This HW-216 has no DIP switch: wire each "on" pin to VCC (3.3 V) and leave "off" pins open. The DRV8825 pulls open pins low internally, so with nothing connected it runs full-step. If a board does have a switch or jumpers, the same table applies; ignore any printed A4988 table.</p>
+      <div class="tablewrap"><table class="dip">
+        <thead><tr><th>Mode</th><th>M0</th><th>M1</th><th>M2</th></tr></thead>
+        <tbody>
+          <tr><td>Full</td><td>off</td><td>off</td><td>off</td></tr>
+          <tr><td>1/2</td><td>on</td><td>off</td><td>off</td></tr>
+          <tr><td>1/4</td><td>off</td><td>on</td><td>off</td></tr>
+          <tr class="pick"><td>1/8 · loader</td><td>on</td><td>on</td><td>off</td></tr>
+          <tr class="pick"><td>1/16 · pan, tilt</td><td>off</td><td>off</td><td>on</td></tr>
+          <tr><td>1/32</td><td>on</td><td>on</td><td>on</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section class="card">
+      <span class="eyebrow">ESCs × 2</span>
+      <h2>Flywheel ESC setup</h2>
+      <ul>
+        <li><b>Power:</b> red/black thick leads to the bus. Their own input caps are enough; a 100 µF across each is optional.</li>
+        <li><b>Servo lead:</b> only signal and ground go to the Pi. If the lead has a red wire (BEC 5 V output), pull it out of the connector and tape it. Two BECs and a buck feeding the same 5 V rail fight each other.</li>
+        <li><b>Signal:</b> 50 Hz servo pulses, 1000 µs = stop, 2000 µs = full. Generate them with <span class="kbd">pigpio</span> (DMA-timed), not RPi.GPIO software PWM, which jitters and makes the motors stutter. Most ESCs accept 3.3 V signals; if one won't arm, add a 74AHCT125 level shifter.</li>
+        <li><b>Arming:</b> send 1000 µs for 2–3 s after power-up. A full-throttle signal at power-on puts many ESCs into calibration mode.</li>
+        <li><b>Safety:</b> at 4S, flywheels spin very fast. A second switch in the ESC + lead lets you power the Pi and steppers for testing while the flywheels stay dead.</li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <span class="eyebrow">Design trade-off</span>
+    <h2>Can the Pi generate the step pulses fast enough?</h2>
+    <p>Linux isn't real-time, and step timing is where that shows. A rough number for the loader at 1/8 step:</p>
+    <div class="calc">133 full steps/stroke × 8 = 1064 µsteps per stroke<br>2 strokes per dart × 3 darts/s ≈ 6400 steps/s on one axis, plus pan and tilt</div>
+    <ul>
+      <li><b>Pi only (this diagram):</b> works if steps come from <span class="kbd">pigpio</span> waveforms, which are DMA-timed. A Python loop with <span class="kbd">time.sleep()</span> will jitter and top out far below that rate, and that will look like the motor's limit when it isn't.</li>
+      <li><b>Pi + microcontroller:</b> a Pi Pico or Arduino owns STEP/DIR/ESC timing; the Pi sends commands over UART. Costs one more board and a protocol, but timing is deterministic and a Pi crash or reboot can't leave a stepper mid-move. The STEP/DIR/EN wiring on the driver side stays identical, so you can switch later without rewiring the power side.</li>
+      <li><b>No endstops:</b> every axis is open-loop. Nothing stops a move at the end of travel, and after skipped steps or a power cycle the position is unknown until you re-reference it by hand.</li>
+    </ul>
+  </section>
+</div>
