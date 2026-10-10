@@ -16,8 +16,8 @@ its own tracking (src/turretd/detect.py).
 
     browser ◄──► turret-ui ◄──► turretd ──frames──► :8100/detect (YOLO, here)
 
-    python3 ui/turret_ui.py                       # Pi at clemenspi.local:8090
-    python3 ui/turret_ui.py --pi 10.0.0.2         # direct link with fixed IPs
+    python3 ui/turret_ui.py                       # Pi on the direct cable, 169.254.42.2:8090
+    python3 ui/turret_ui.py --pi clemenspi.local  # Pi over Wi-Fi
     python3 ui/turret_ui.py --pi localhost:8090   # against `python3 -m turretd --sim`
     python3 ui/turret_ui.py --no-detect           # without the YOLO model
 """
@@ -36,7 +36,9 @@ import aiohttp
 from aiohttp import WSMsgType, web
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
-DEFAULT_PI = os.environ.get('TURRET_PI', 'clemenspi.local:8090')
+# Direct Ethernet cable Mac ↔ Pi: the Pi has a fixed 169.254.42.2/16 on eth0 (the Mac
+# self-assigns 169.254.x.x on the cable). Over Wi-Fi: --pi clemenspi.local
+DEFAULT_PI = os.environ.get('TURRET_PI', '169.254.42.2:8090')
 RECONNECT_S = 2.0
 
 PI = web.AppKey('pi', str)
